@@ -6,6 +6,7 @@
 #
 # Usage (non-interactive, via Claude Code):
 #   curl -fsSL .../install.sh | bash -s -- --demo
+#   curl -fsSL .../install.sh | bash -s -- --detect
 #   curl -fsSL .../install.sh | bash -s -- --db-host=localhost --db-port=5432 --db-name=mydb --db-user=me --db-pass=secret
 #
 # What it does:
@@ -32,6 +33,7 @@ for arg in "$@"; do
   case "$arg" in
     --demo)          MODE="demo" ;;
     --own-db)        MODE="own" ;;
+    --detect)        MODE="detect" ;;
     --db-host=*)     DB_HOST="${arg#*=}" ;;
     --db-port=*)     DB_PORT="${arg#*=}" ;;
     --db-name=*)     DB_NAME="${arg#*=}" ;;
@@ -201,7 +203,7 @@ install_docker() {
 # ─── Database choice ────────────────────────────────────────────────────────
 
 choose_database() {
-  # If mode was set via flags, skip prompts
+  # Flag-based modes (non-interactive)
   if [ "$MODE" = "demo" ]; then
     setup_demo_database
     return
@@ -218,45 +220,124 @@ choose_database() {
     return
   fi
 
-  # Non-interactive (Claude Code without flags) — output choices for Claude
+  if [ "$MODE" = "detect" ]; then
+    detect_postgres_instances
+    if [ ${#DETECTED_PORTS[@]} -eq 0 ]; then
+      echo ""
+      echo "DETECT_NO_INSTANCES"
+      echo "No reachable PostgreSQL instance found. Re-run with:"
+      echo "  --own-db --db-host=HOST --db-port=PORT --db-name=DB --db-user=USER --db-pass=PASS"
+      DB_CONFIGURED=false
+      return
+    fi
+    # Auto-connect to first instance, first database
+    local target_port=""
+    [ -n "$DB_PORT" ] && target_port="$DB_PORT"
+    connect_existing_auto "$target_port"
+    return
+  fi
+
+  # --- Detect existing instances ---
+  detect_postgres_instances
+
+  # Non-interactive without flags — output choices for Claude
   if ! has_tty; then
     echo ""
     echo "DATABASE_CHOICE_NEEDED"
     echo "The MCP server needs a PostgreSQL database to connect to."
-    echo "Options:"
-    echo "  1. Demo database — sample Northwind data, requires Docker"
-    echo "  2. Your own database — provide connection details"
-    echo ""
-    echo "Re-run with flags:"
-    echo "  --demo                              (start demo database with Docker)"
-    echo "  --install-docker                    (install Docker first, then demo)"
-    echo "  --own-db --db-host=HOST --db-port=PORT --db-name=DB --db-user=USER --db-pass=PASS"
+    if [ ${#DETECTED_PORTS[@]} -gt 0 ]; then
+      echo ""
+      echo "Detected PostgreSQL on port(s): ${DETECTED_PORTS[*]}"
+      echo ""
+      echo "Options:"
+      echo "  1. Connect to detected instance — re-run with: --detect"
+      echo "  2. Demo database — re-run with: --demo"
+      echo "  3. Your own database — re-run with: --own-db --db-host=HOST --db-port=PORT --db-name=DB --db-user=USER --db-pass=PASS"
+    else
+      echo "Options:"
+      echo "  1. Demo database — re-run with: --demo"
+      echo "  2. Your own database — re-run with: --own-db --db-host=HOST --db-port=PORT --db-name=DB --db-user=USER --db-pass=PASS"
+    fi
     echo ""
     DB_CONFIGURED=false
     return
   fi
 
-  # Interactive (human in terminal)
+  # --- Interactive menu ---
   echo ""
   echo "  The MCP server needs a PostgreSQL database to connect to."
-  echo ""
-  echo "  Which would you like?"
-  echo ""
-  echo "    1) Load a sample database (Northwind — customers, orders, products)"
-  echo "       Requires Docker. Great for trying things out."
-  echo ""
-  echo "    2) Connect to my own PostgreSQL database"
-  echo "       You'll provide the connection details."
-  echo ""
 
-  local choice
-  ask "  Enter 1 or 2: " choice
+  if [ ${#DETECTED_PORTS[@]} -gt 0 ]; then
+    echo ""
+    echo "  I found PostgreSQL running on:"
+    for i in "${!DETECTED_PORTS[@]}"; do
+      local port="${DETECTED_PORTS[$i]}"
+      local confirmed="${DETECTED_CONFIRMED[$i]}"
+      if [ "$confirmed" = "true" ]; then
+        echo "    * port $port"
+      else
+        echo "    * port $port (likely PostgreSQL)"
+      fi
+    done
 
-  case "$choice" in
-    1) setup_demo_database ;;
-    2) setup_own_database ;;
-    *) info "Defaulting to sample database..."; setup_demo_database ;;
-  esac
+    echo ""
+    echo "  Which would you like?"
+    echo ""
+    echo "    1) Connect to an existing instance (port ${DETECTED_PORTS[0]})"
+    echo "       I'll help you pick a database."
+    echo ""
+    echo "    2) Load a sample database (Northwind — customers, orders, products)"
+    echo "       Requires Docker. Runs on a non-conflicting port."
+    echo ""
+    echo "    3) Connect to a different PostgreSQL database"
+    echo "       You'll provide the connection details."
+    echo ""
+
+    local choice
+    if [ ${#DETECTED_PORTS[@]} -gt 1 ]; then
+      ask "  Enter 1, 2, or 3 (or 1:<port> to pick a specific instance): " choice
+    else
+      ask "  Enter 1, 2, or 3: " choice
+    fi
+
+    # Parse "1:port" syntax
+    local target_port=""
+    case "$choice" in
+      1:*)
+        target_port="${choice#1:}"
+        choice="1"
+        ;;
+    esac
+
+    case "$choice" in
+      1) connect_existing_instance "$target_port" ;;
+      2) setup_demo_database ;;
+      3) setup_own_database ;;
+      *) info "Defaulting to existing instance..."
+         connect_existing_instance "$target_port" ;;
+    esac
+  else
+    # No instances detected — show original two-option menu
+    echo ""
+    echo "  Which would you like?"
+    echo ""
+    echo "    1) Load a sample database (Northwind — customers, orders, products)"
+    echo "       Requires Docker. Great for trying things out."
+    echo ""
+    echo "    2) Connect to my own PostgreSQL database"
+    echo "       You'll provide the connection details."
+    echo ""
+
+    local choice
+    ask "  Enter 1 or 2: " choice
+
+    case "$choice" in
+      1) setup_demo_database ;;
+      2) setup_own_database ;;
+      *) info "Defaulting to sample database..."
+         setup_demo_database ;;
+    esac
+  fi
 }
 
 # ─── Demo database setup ────────────────────────────────────────────────────
@@ -682,6 +763,50 @@ prompt_credentials_and_list() {
   warn "Could not connect to port $port. Try the manual option."
   echo ""
   setup_own_database
+}
+
+# ─── Auto-connect (non-interactive --detect mode) ──────────────────────
+
+connect_existing_auto() {
+  local target_port="${1:-}"
+  local has_psql=false
+  command -v psql &>/dev/null && has_psql=true
+
+  for i in "${!DETECTED_PORTS[@]}"; do
+    local port="${DETECTED_PORTS[$i]}"
+    if [ -n "$target_port" ] && [ "$port" != "$target_port" ]; then
+      continue
+    fi
+
+    if $has_psql && try_passwordless_auth "$port"; then
+      # If --db-name was specified, use it directly
+      if [ -n "$DB_NAME" ]; then
+        DB_HOST="localhost"; DB_PORT="$port"
+        DB_USER="$AUTH_USER"; DB_PASS=""
+        DB_CONFIGURED=true
+        ok "Using database: $DB_NAME on localhost:$port ($AUTH_USER)"
+        return
+      fi
+
+      # Otherwise pick first user database
+      local first_db
+      first_db=$(list_databases "$port" "$AUTH_USER" "" | head -1)
+      if [ -n "$first_db" ]; then
+        DB_HOST="localhost"; DB_PORT="$port"
+        DB_NAME="$first_db"; DB_USER="$AUTH_USER"; DB_PASS=""
+        DB_CONFIGURED=true
+        ok "Auto-detected: $DB_NAME on localhost:$port ($AUTH_USER)"
+        return
+      fi
+    fi
+  done
+
+  echo ""
+  echo "DETECT_AUTH_FAILED"
+  echo "Could not authenticate to any detected instance."
+  echo "Re-run with explicit credentials:"
+  echo "  --own-db --db-host=HOST --db-port=PORT --db-name=DB --db-user=USER --db-pass=PASS"
+  DB_CONFIGURED=false
 }
 
 # ─── Clean up old demo containers ─────────────────────────────────────────
