@@ -498,7 +498,7 @@ try_passwordless_auth() {
   fi
 
   # Try 'postgres' user first (most common superuser)
-  if PGPASSWORD="" psql -h localhost -p "$port" -U postgres \
+  if PGPASSWORD="" psql -h localhost -p "$port" -U postgres -d postgres \
        -w -c "SELECT 1" >/dev/null 2>&1; then
     AUTH_USER="postgres"
     return 0
@@ -508,7 +508,7 @@ try_passwordless_auth() {
   local os_user
   os_user="$(whoami)"
   if [ "$os_user" != "postgres" ]; then
-    if PGPASSWORD="" psql -h localhost -p "$port" -U "$os_user" \
+    if PGPASSWORD="" psql -h localhost -p "$port" -U "$os_user" -d postgres \
          -w -c "SELECT 1" >/dev/null 2>&1; then
       AUTH_USER="$os_user"
       return 0
@@ -525,7 +525,7 @@ try_passwordless_auth() {
 list_databases() {
   local port="$1" user="$2" password="${3:-}"
 
-  PGPASSWORD="$password" psql -h localhost -p "$port" -U "$user" \
+  PGPASSWORD="$password" psql -h localhost -p "$port" -U "$user" -d postgres \
     -w -t -A -c "
     SELECT datname FROM pg_database
     WHERE datistemplate = false
@@ -706,7 +706,7 @@ prompt_credentials_and_list() {
     user="${user:-postgres}"
     ask_secret "  Password: " pass
 
-    if PGPASSWORD="$pass" psql -h localhost -p "$port" -U "$user" \
+    if PGPASSWORD="$pass" psql -h localhost -p "$port" -U "$user" -d postgres \
          -w -c "SELECT 1" >/dev/null 2>&1; then
       ok "Connected to port $port as '$user'"
 

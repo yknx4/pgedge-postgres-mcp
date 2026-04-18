@@ -507,11 +507,12 @@ function Test-PasswordlessAuth {
     }
 
     $prevPref = $ErrorActionPreference
+    $prevPgPassword = $env:PGPASSWORD
     try {
         $env:PGPASSWORD = ""
         $ErrorActionPreference = 'SilentlyContinue'
 
-        & psql -h localhost -p $Port -U postgres -w -c "SELECT 1" 2>$null | Out-Null
+        & psql -h localhost -p $Port -U postgres -d postgres -w -c "SELECT 1" 2>$null | Out-Null
         if ($LASTEXITCODE -eq 0) {
             $script:AuthUser = "postgres"
             return $true
@@ -519,7 +520,7 @@ function Test-PasswordlessAuth {
 
         $osUser = $env:USERNAME
         if ($osUser -ne "postgres") {
-            & psql -h localhost -p $Port -U $osUser -w -c "SELECT 1" 2>$null | Out-Null
+            & psql -h localhost -p $Port -U $osUser -d postgres -w -c "SELECT 1" 2>$null | Out-Null
             if ($LASTEXITCODE -eq 0) {
                 $script:AuthUser = $osUser
                 return $true
@@ -530,7 +531,7 @@ function Test-PasswordlessAuth {
     } catch {
         return $false
     } finally {
-        $env:PGPASSWORD = $null
+        $env:PGPASSWORD = $prevPgPassword
         $ErrorActionPreference = $prevPref
     }
 }
@@ -540,10 +541,11 @@ function Test-PasswordlessAuth {
 function Get-UserDatabases {
     param([int]$Port, [string]$User, [string]$Password)
     $prevPref = $ErrorActionPreference
+    $prevPgPassword = $env:PGPASSWORD
     try {
         $env:PGPASSWORD = $Password
         $ErrorActionPreference = 'SilentlyContinue'
-        $output = & psql -h localhost -p $Port -U $User -w -t -A -c @"
+        $output = & psql -h localhost -p $Port -U $User -d postgres -w -t -A -c @"
 SELECT datname FROM pg_database
 WHERE datistemplate = false
   AND datname NOT IN ('postgres')
@@ -556,7 +558,7 @@ ORDER BY datname
         }
     } catch {}
     finally {
-        $env:PGPASSWORD = $null
+        $env:PGPASSWORD = $prevPgPassword
         $ErrorActionPreference = $prevPref
     }
     return @()
@@ -577,8 +579,8 @@ function Connect-ExistingInstance {
         if ($TargetPort -and $inst.Port -ne [int]$TargetPort) { continue }
 
         if ($hasPsql -and (Test-PasswordlessAuth -Port $inst.Port)) {
-            $dbs = Get-UserDatabases -Port $inst.Port `
-                -User $script:AuthUser -Password ""
+            $dbs = @(Get-UserDatabases -Port $inst.Port `
+                -User $script:AuthUser -Password "")
             Write-Host ""
             Write-Host "    Port $($inst.Port) — connected as '$($script:AuthUser)'"
             if ($dbs.Count -gt 0) {
@@ -692,14 +694,15 @@ function Invoke-CredentialPrompt {
         }
 
         $prevPref = $ErrorActionPreference
+        $prevPgPassword = $env:PGPASSWORD
         try {
             $env:PGPASSWORD = $pass
             $ErrorActionPreference = 'SilentlyContinue'
-            & psql -h localhost -p $Port -U $user -w -c "SELECT 1" 2>$null | Out-Null
+            & psql -h localhost -p $Port -U $user -d postgres -w -c "SELECT 1" 2>$null | Out-Null
             if ($LASTEXITCODE -eq 0) {
                 Write-Ok "Connected to port $Port as '$user'"
 
-                $dbs = Get-UserDatabases -Port $Port -User $user -Password $pass
+                $dbs = @(Get-UserDatabases -Port $Port -User $user -Password $pass)
                 if ($dbs.Count -gt 0) {
                     Write-Host ""
                     Write-Host "  Databases on port ${Port}:"
@@ -741,7 +744,7 @@ function Invoke-CredentialPrompt {
             }
         } catch {}
         finally {
-            $env:PGPASSWORD = $null
+            $env:PGPASSWORD = $prevPgPassword
             $ErrorActionPreference = $prevPref
         }
 
@@ -768,8 +771,8 @@ function Connect-ExistingAuto {
 
         if ($hasPsql -and (Test-PasswordlessAuth -Port $inst.Port)) {
             if ($script:DbName) {
-                $dbs = Get-UserDatabases -Port $inst.Port `
-                    -User $script:AuthUser -Password ""
+                $dbs = @(Get-UserDatabases -Port $inst.Port `
+                    -User $script:AuthUser -Password "")
                 if ($dbs -contains $script:DbName) {
                     $script:DbHost = "localhost"
                     $script:DbPort = "$($inst.Port)"
@@ -783,8 +786,8 @@ function Connect-ExistingAuto {
                 continue
             }
 
-            $dbs = Get-UserDatabases -Port $inst.Port `
-                -User $script:AuthUser -Password ""
+            $dbs = @(Get-UserDatabases -Port $inst.Port `
+                -User $script:AuthUser -Password "")
             if ($dbs.Count -gt 0) {
                 $script:DbHost = "localhost"
                 $script:DbPort = "$($inst.Port)"
