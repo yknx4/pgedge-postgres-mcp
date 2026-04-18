@@ -433,7 +433,7 @@ function Start-DemoDatabase {
 function Find-FreePort {
     foreach ($port in 5432, 5433, 5434, 5435, 5436) {
         $inUse = Get-NetTCPConnection -LocalPort $port `
-            -ErrorAction SilentlyContinue
+            -State Listen -ErrorAction SilentlyContinue
         if (-not $inUse) {
             return $port
         }
@@ -505,44 +505,43 @@ function Test-PasswordlessAuth {
         return $false
     }
 
-    # Try 'postgres' user
-    $env:PGPASSWORD = ""
     $prevPref = $ErrorActionPreference
-    $ErrorActionPreference = 'SilentlyContinue'
     try {
+        $env:PGPASSWORD = ""
+        $ErrorActionPreference = 'SilentlyContinue'
+
         & psql -h localhost -p $Port -U postgres -w -c "SELECT 1" 2>$null | Out-Null
         if ($LASTEXITCODE -eq 0) {
             $script:AuthUser = "postgres"
-            $ErrorActionPreference = $prevPref
             return $true
         }
-    } catch {}
 
-    # Try current OS username
-    $osUser = $env:USERNAME
-    if ($osUser -ne "postgres") {
-        try {
+        $osUser = $env:USERNAME
+        if ($osUser -ne "postgres") {
             & psql -h localhost -p $Port -U $osUser -w -c "SELECT 1" 2>$null | Out-Null
             if ($LASTEXITCODE -eq 0) {
                 $script:AuthUser = $osUser
-                $ErrorActionPreference = $prevPref
                 return $true
             }
-        } catch {}
-    }
+        }
 
-    $ErrorActionPreference = $prevPref
-    return $false
+        return $false
+    } catch {
+        return $false
+    } finally {
+        $env:PGPASSWORD = $null
+        $ErrorActionPreference = $prevPref
+    }
 }
 
 # --- List user databases -------------------------------------------------
 
 function Get-UserDatabases {
     param([int]$Port, [string]$User, [string]$Password)
-    $env:PGPASSWORD = $Password
     $prevPref = $ErrorActionPreference
-    $ErrorActionPreference = 'SilentlyContinue'
     try {
+        $env:PGPASSWORD = $Password
+        $ErrorActionPreference = 'SilentlyContinue'
         $output = & psql -h localhost -p $Port -U $User -w -t -A -c @"
 SELECT datname FROM pg_database
 WHERE datistemplate = false
@@ -555,7 +554,10 @@ ORDER BY datname
             })
         }
     } catch {}
-    finally { $ErrorActionPreference = $prevPref }
+    finally {
+        $env:PGPASSWORD = $null
+        $ErrorActionPreference = $prevPref
+    }
     return @()
 }
 
@@ -688,13 +690,12 @@ function Invoke-CredentialPrompt {
             $pass = ""
         }
 
-        $env:PGPASSWORD = $pass
         $prevPref = $ErrorActionPreference
-        $ErrorActionPreference = 'SilentlyContinue'
         try {
+            $env:PGPASSWORD = $pass
+            $ErrorActionPreference = 'SilentlyContinue'
             & psql -h localhost -p $Port -U $user -w -c "SELECT 1" 2>$null | Out-Null
             if ($LASTEXITCODE -eq 0) {
-                $ErrorActionPreference = $prevPref
                 Write-Ok "Connected to port $Port as '$user'"
 
                 $dbs = Get-UserDatabases -Port $Port -User $user -Password $pass
@@ -738,7 +739,10 @@ function Invoke-CredentialPrompt {
                 return
             }
         } catch {}
-        finally { $ErrorActionPreference = $prevPref }
+        finally {
+            $env:PGPASSWORD = $null
+            $ErrorActionPreference = $prevPref
+        }
 
         Write-Warn "Authentication failed."
         $attempts++
@@ -763,13 +767,19 @@ function Connect-ExistingAuto {
 
         if ($hasPsql -and (Test-PasswordlessAuth -Port $inst.Port)) {
             if ($script:DbName) {
-                $script:DbHost = "localhost"
-                $script:DbPort = "$($inst.Port)"
-                $script:DbUser = $script:AuthUser
-                $script:DbPass = ""
-                $script:DbConfigured = $true
-                Write-Ok "Using database: $($script:DbName) on localhost:$($inst.Port) ($($script:AuthUser))"
-                return
+                $dbs = Get-UserDatabases -Port $inst.Port `
+                    -User $script:AuthUser -Password ""
+                if ($dbs -contains $script:DbName) {
+                    $script:DbHost = "localhost"
+                    $script:DbPort = "$($inst.Port)"
+                    $script:DbUser = $script:AuthUser
+                    $script:DbPass = ""
+                    $script:DbConfigured = $true
+                    Write-Ok "Using database: $($script:DbName) on localhost:$($inst.Port) ($($script:AuthUser))"
+                    return
+                }
+                Write-Warn "Database '$($script:DbName)' not found on port $($inst.Port)"
+                continue
             }
 
             $dbs = Get-UserDatabases -Port $inst.Port `

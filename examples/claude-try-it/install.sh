@@ -778,13 +778,19 @@ connect_existing_auto() {
     fi
 
     if $has_psql && try_passwordless_auth "$port"; then
-      # If --db-name was specified, use it directly
+      # If --db-name was specified, verify it exists
       if [ -n "$DB_NAME" ]; then
-        DB_HOST="localhost"; DB_PORT="$port"
-        DB_USER="$AUTH_USER"; DB_PASS=""
-        DB_CONFIGURED=true
-        ok "Using database: $DB_NAME on localhost:$port ($AUTH_USER)"
-        return
+        local dbs
+        dbs=$(list_databases "$port" "$AUTH_USER" "")
+        if echo "$dbs" | grep -qx "$DB_NAME"; then
+          DB_HOST="localhost"; DB_PORT="$port"
+          DB_USER="$AUTH_USER"; DB_PASS=""
+          DB_CONFIGURED=true
+          ok "Using database: $DB_NAME on localhost:$port ($AUTH_USER)"
+          return
+        fi
+        warn "Database '$DB_NAME' not found on port $port"
+        continue
       fi
 
       # Otherwise pick first user database
