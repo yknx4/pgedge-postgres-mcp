@@ -8,6 +8,8 @@
 #
 # Usage (with flags, saved locally):
 #   .\install.ps1 -Demo
+#   .\install.ps1 -Detect
+#   .\install.ps1 -Detect -DbPort 5433
 #   .\install.ps1 -OwnDb -DbHost localhost -DbPort 5432 -DbName mydb -DbUser me -DbPass secret
 #
 # What it does:
@@ -19,6 +21,7 @@ param(
     [switch]$Demo,
     [switch]$OwnDb,
     [switch]$InstallDocker,
+    [switch]$Detect,
     [string]$DbHost,
     [string]$DbPort,
     [string]$DbName,
@@ -226,44 +229,119 @@ function Select-Database {
         Start-DemoDatabase
         return
     }
+    if ($Detect) {
+        $script:DetectedInstances = Detect-PostgresInstances
+        if ($script:DetectedInstances.Count -eq 0) {
+            Write-Host ""
+            Write-Host "DETECT_NO_INSTANCES"
+            Write-Host "No reachable PostgreSQL instance found. Re-run with:"
+            Write-Host "  -OwnDb -DbHost HOST -DbPort PORT -DbName DB -DbUser USER -DbPass PASS"
+            $script:DbConfigured = $false
+            return
+        }
+        Connect-ExistingAuto -TargetPort $DbPort
+        return
+    }
+
+    # Detect instances
+    $script:DetectedInstances = Detect-PostgresInstances
 
     # Non-interactive — output choices for Claude
     if (-not (Test-Interactive)) {
         Write-Host ""
         Write-Host "DATABASE_CHOICE_NEEDED"
         Write-Host "The MCP server needs a PostgreSQL database to connect to."
-        Write-Host "Options:"
-        Write-Host "  1. Demo database - sample Northwind data, requires Docker"
-        Write-Host "  2. Your own database - provide connection details"
-        Write-Host ""
-        Write-Host "Re-run with flags:"
-        Write-Host "  -Demo                              (start demo database with Docker)"
-        Write-Host "  -InstallDocker                     (install Docker first, then demo)"
-        Write-Host "  -OwnDb -DbHost HOST -DbPort PORT -DbName DB -DbUser USER -DbPass PASS"
+        if ($script:DetectedInstances.Count -gt 0) {
+            $ports = ($script:DetectedInstances | ForEach-Object { $_.Port }) -join ", "
+            Write-Host ""
+            Write-Host "Detected PostgreSQL on port(s): $ports"
+            Write-Host ""
+            Write-Host "Options:"
+            Write-Host "  1. Connect to detected instance - re-run with: -Detect"
+            Write-Host "  2. Demo database - re-run with: -Demo"
+            Write-Host "  3. Your own database - re-run with: -OwnDb -DbHost HOST -DbPort PORT -DbName DB -DbUser USER -DbPass PASS"
+        } else {
+            Write-Host "Options:"
+            Write-Host "  1. Demo database - re-run with: -Demo"
+            Write-Host "  2. Your own database - re-run with: -OwnDb -DbHost HOST -DbPort PORT -DbName DB -DbUser USER -DbPass PASS"
+        }
         Write-Host ""
         $script:DbConfigured = $false
         return
     }
 
-    # Interactive
+    # Interactive menu
     Write-Host ""
     Write-Host "  The MCP server needs a PostgreSQL database to connect to."
-    Write-Host ""
-    Write-Host "  Which would you like?"
-    Write-Host ""
-    Write-Host "    1) Load a sample database (Northwind - customers, orders, products)"
-    Write-Host "       Requires Docker. Great for trying things out."
-    Write-Host ""
-    Write-Host "    2) Connect to my own PostgreSQL database"
-    Write-Host "       You'll provide the connection details."
-    Write-Host ""
 
-    $choice = Read-Prompt "  Enter 1 or 2" "1"
+    if ($script:DetectedInstances.Count -gt 0) {
+        Write-Host ""
+        Write-Host "  I found PostgreSQL running on:"
+        foreach ($inst in $script:DetectedInstances) {
+            if ($inst.Confirmed) {
+                Write-Host "    * port $($inst.Port)"
+            } else {
+                Write-Host "    * port $($inst.Port) (likely PostgreSQL)"
+            }
+        }
 
-    switch ($choice) {
-        "1" { Start-DemoDatabase }
-        "2" { Set-OwnDatabase }
-        default { Write-Info "Defaulting to sample database..."; Start-DemoDatabase }
+        $defaultPort = $script:DetectedInstances[0].Port
+
+        Write-Host ""
+        Write-Host "  Which would you like?"
+        Write-Host ""
+        Write-Host "    1) Connect to an existing instance (port $defaultPort)"
+        Write-Host "       I'll help you pick a database."
+        Write-Host ""
+        Write-Host "    2) Load a sample database (Northwind - customers, orders, products)"
+        Write-Host "       Requires Docker. Runs on a non-conflicting port."
+        Write-Host ""
+        Write-Host "    3) Connect to a different PostgreSQL database"
+        Write-Host "       You'll provide the connection details."
+        Write-Host ""
+
+        $promptText = "  Enter 1, 2, or 3"
+        if ($script:DetectedInstances.Count -gt 1) {
+            $promptText = "  Enter 1, 2, or 3 (or 1:<port> to pick a specific instance)"
+        }
+        $choice = Read-Prompt $promptText "1"
+
+        $targetPort = ""
+        if ($choice -match '^1:(\d+)$') {
+            $targetPort = $Matches[1]
+            $choice = "1"
+        }
+
+        switch ($choice) {
+            "1" { Connect-ExistingInstance -TargetPort $targetPort }
+            "2" { Start-DemoDatabase }
+            "3" { Set-OwnDatabase }
+            default {
+                Write-Info "Defaulting to existing instance..."
+                Connect-ExistingInstance -TargetPort $targetPort
+            }
+        }
+    } else {
+        Write-Host ""
+        Write-Host "  Which would you like?"
+        Write-Host ""
+        Write-Host "    1) Load a sample database (Northwind - customers, orders, products)"
+        Write-Host "       Requires Docker. Great for trying things out."
+        Write-Host ""
+        Write-Host "    2) Connect to my own PostgreSQL database"
+        Write-Host "       You'll provide the connection details."
+        Write-Host ""
+
+        $choice = Read-Prompt "  Enter 1 or 2" "1"
+
+        switch ($choice) {
+            "1" { Start-DemoDatabase }
+            "2" { Set-OwnDatabase }
+            default {
+                Write-Info "Defaulting to sample database..."
+                Start-DemoDatabase
+            }
+        }
     }
 }
 
@@ -669,6 +747,52 @@ function Invoke-CredentialPrompt {
     Write-Warn "Could not connect to port $Port. Try the manual option."
     Write-Host ""
     Set-OwnDatabase
+}
+
+# --- Auto-connect (non-interactive -Detect mode) --------------------------
+
+function Connect-ExistingAuto {
+    param([string]$TargetPort)
+
+    $hasPsql = [bool](Get-Command psql -ErrorAction SilentlyContinue)
+
+    foreach ($inst in $script:DetectedInstances) {
+        if ($TargetPort -and $inst.Port -ne [int]$TargetPort) {
+            continue
+        }
+
+        if ($hasPsql -and (Test-PasswordlessAuth -Port $inst.Port)) {
+            if ($script:DbName) {
+                $script:DbHost = "localhost"
+                $script:DbPort = "$($inst.Port)"
+                $script:DbUser = $script:AuthUser
+                $script:DbPass = ""
+                $script:DbConfigured = $true
+                Write-Ok "Using database: $($script:DbName) on localhost:$($inst.Port) ($($script:AuthUser))"
+                return
+            }
+
+            $dbs = Get-UserDatabases -Port $inst.Port `
+                -User $script:AuthUser -Password ""
+            if ($dbs.Count -gt 0) {
+                $script:DbHost = "localhost"
+                $script:DbPort = "$($inst.Port)"
+                $script:DbName = $dbs[0]
+                $script:DbUser = $script:AuthUser
+                $script:DbPass = ""
+                $script:DbConfigured = $true
+                Write-Ok "Auto-detected: $($dbs[0]) on localhost:$($inst.Port) ($($script:AuthUser))"
+                return
+            }
+        }
+    }
+
+    Write-Host ""
+    Write-Host "DETECT_AUTH_FAILED"
+    Write-Host "Could not authenticate to any detected instance."
+    Write-Host "Re-run with explicit credentials:"
+    Write-Host "  -OwnDb -DbHost HOST -DbPort PORT -DbName DB -DbUser USER -DbPass PASS"
+    $script:DbConfigured = $false
 }
 
 # --- Remove old demo containers ------------------------------------------
