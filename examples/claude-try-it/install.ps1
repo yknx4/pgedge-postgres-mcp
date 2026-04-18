@@ -599,15 +599,21 @@ function Connect-ExistingInstance {
             Write-Host ""
             if ($hasPsql) {
                 Write-Host "    Port $($inst.Port) — authentication required"
+                $options += [PSCustomObject]@{
+                    Type = "auth"; Port = $inst.Port
+                    User = ""; Password = ""
+                    DbName = ""; InstIndex = $null
+                }
+                Write-Host "      $($options.Count)) Enter credentials for this instance"
             } else {
                 Write-Host "    Port $($inst.Port) — psql not installed, cannot list databases"
+                $options += [PSCustomObject]@{
+                    Type = "manualPort"; Port = $inst.Port
+                    User = ""; Password = ""
+                    DbName = ""; InstIndex = $null
+                }
+                Write-Host "      $($options.Count)) Enter connection details for port $($inst.Port)"
             }
-            $options += [PSCustomObject]@{
-                Type = "auth"; Port = $inst.Port
-                User = ""; Password = ""
-                DbName = ""; InstIndex = $null
-            }
-            Write-Host "      $($options.Count)) Enter credentials for this instance"
         }
     }
 
@@ -654,6 +660,11 @@ function Connect-ExistingInstance {
         }
         "auth" {
             Invoke-CredentialPrompt -Port $selected.Port
+        }
+        "manualPort" {
+            $script:DbHost = "localhost"
+            $script:DbPort = "$($selected.Port)"
+            Set-OwnDatabase
         }
         "demo" {
             Start-DemoDatabase
@@ -1232,6 +1243,7 @@ function Stop-StaleProcesses {
 # --- Check for existing installation -------------------------------------
 
 function Test-ExistingInstall {
+    $explicitReconfigure = $Detect -or $Demo -or $OwnDb
     $binaryExt = if ($script:OS -eq "windows") { ".exe" } else { "" }
     $binary = Join-Path $BinDir "pgedge-postgres-mcp$binaryExt"
     if (-not (Test-Path $binary)) { return $false }
@@ -1246,15 +1258,25 @@ function Test-ExistingInstall {
         Write-Host ""
         Write-Ok "pgEdge MCP Server $($script:Version) is already up to date."
         Write-Host ""
-        if (Test-Interactive) {
-            $reconfigure = Read-Prompt "  Want to reconfigure the database connection? (y/n)" "n"
-            if ($reconfigure -match '^[Yy]') {
-                Write-Host ""
-                Select-Database
+        if ($explicitReconfigure) {
+            Select-Database
+            if ($script:DbConfigured) {
                 Write-Host ""
                 Set-ClaudeCodeConfig
                 Set-ClaudeDesktopConfig
                 Write-Summary
+            }
+        } elseif (Test-Interactive) {
+            $reconfigure = Read-Prompt "  Want to reconfigure the database connection? (y/n)" "n"
+            if ($reconfigure -match '^[Yy]') {
+                Write-Host ""
+                Select-Database
+                if ($script:DbConfigured) {
+                    Write-Host ""
+                    Set-ClaudeCodeConfig
+                    Set-ClaudeDesktopConfig
+                    Write-Summary
+                }
             } else {
                 Write-Host ""
                 Write-Info "Nothing to do. Exiting."
@@ -1289,6 +1311,16 @@ function Test-ExistingInstall {
         Stop-StaleProcesses
         Install-Binary
         Write-Ok "Updated to $($script:Version)."
+    }
+
+    if ($explicitReconfigure) {
+        Select-Database
+        if ($script:DbConfigured) {
+            Write-Host ""
+            Set-ClaudeCodeConfig
+            Set-ClaudeDesktopConfig
+            Write-Summary
+        }
     }
     return $true
 }

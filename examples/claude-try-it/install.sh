@@ -629,13 +629,17 @@ connect_existing_instance() {
     else
       if $has_psql; then
         echo "    Port $port — authentication required"
+        echo "      $option_num) Enter credentials for this instance"
+        option_type+=("auth")
+        option_data+=("$i")
+        option_num=$((option_num + 1))
       else
         echo "    Port $port — psql not installed, cannot list databases"
+        echo "      $option_num) Enter connection details for port $port"
+        option_type+=("manualPort")
+        option_data+=("$port")
+        option_num=$((option_num + 1))
       fi
-      echo "      $option_num) Enter credentials for this instance"
-      option_type+=("auth")
-      option_data+=("$i")
-      option_num=$((option_num + 1))
     fi
 
     echo ""
@@ -680,6 +684,11 @@ connect_existing_instance() {
       local inst_idx="${option_data[$idx]}"
       local port="${inst_ports[$inst_idx]}"
       prompt_credentials_and_list "$port"
+      ;;
+    manualPort)
+      DB_HOST="localhost"
+      DB_PORT="${option_data[$idx]}"
+      setup_own_database
       ;;
     demo)
       setup_demo_database
@@ -1227,6 +1236,9 @@ check_existing_install() {
   local binary="$BIN_DIR/pgedge-postgres-mcp"
   [ -f "$binary" ] || return 1
 
+  local explicit_reconfigure=false
+  [ -n "$MODE" ] && explicit_reconfigure=true
+
   local installed_version=""
   if [ -f "$BIN_DIR/.version" ]; then
     installed_version=$(cat "$BIN_DIR/.version")
@@ -1236,17 +1248,27 @@ check_existing_install() {
     echo ""
     ok "pgEdge MCP Server $VERSION is already up to date."
     echo ""
-    if [ -t 0 ]; then
+    if $explicit_reconfigure; then
+      choose_database
+      if [ "$DB_CONFIGURED" = true ]; then
+        echo ""
+        configure_claude_code
+        configure_claude_desktop
+        print_summary
+      fi
+    elif [ -t 0 ]; then
       local reconfigure
       ask "  Want to reconfigure the database connection? (y/n): " reconfigure
       case "$reconfigure" in
         [Yy]*)
           echo ""
           choose_database
-          echo ""
-          configure_claude_code
-          configure_claude_desktop
-          print_summary
+          if [ "$DB_CONFIGURED" = true ]; then
+            echo ""
+            configure_claude_code
+            configure_claude_desktop
+            print_summary
+          fi
           ;;
         *)
           echo ""
@@ -1283,6 +1305,16 @@ check_existing_install() {
     stop_stale_processes
     download_binary
     ok "Updated to $VERSION."
+  fi
+
+  if $explicit_reconfigure; then
+    choose_database
+    if [ "$DB_CONFIGURED" = true ]; then
+      echo ""
+      configure_claude_code
+      configure_claude_desktop
+      print_summary
+    fi
   fi
   exit 0
 }
