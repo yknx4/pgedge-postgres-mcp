@@ -352,18 +352,16 @@ function Start-DemoDatabase {
 
 function Find-FreePort {
     foreach ($port in 5432, 5433, 5434, 5435, 5436) {
-        try {
-            $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $port)
-            $listener.Start()
-            $listener.Stop()
+        $inUse = Get-NetTCPConnection -LocalPort $port `
+            -ErrorAction SilentlyContinue
+        if (-not $inUse) {
             return $port
-        } catch {
-            continue
         }
     }
-    # Last resort: let .NET pick
+    # Last resort: let .NET pick an ephemeral port
     try {
-        $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+        $listener = [System.Net.Sockets.TcpListener]::new(
+            [System.Net.IPAddress]::Loopback, 0)
         $listener.Start()
         $port = $listener.LocalEndpoint.Port
         $listener.Stop()
