@@ -1179,6 +1179,22 @@ configure_claude_desktop() {
 
 # ─── Summary ─────────────────────────────────────────────────────────────────
 
+print_update_summary() {
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "  Update complete!"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo ""
+  echo "  Your existing database configuration is unchanged."
+  echo ""
+  echo "  Claude Code:    start a new conversation to use"
+  echo "                  the updated server"
+  echo "  Claude Desktop: restart the app to pick up the"
+  echo "                  new version"
+  echo ""
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo ""
+}
+
 print_summary() {
   echo ""
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -1294,7 +1310,7 @@ check_existing_install() {
         download_binary
         ok "Updated to $VERSION."
         echo ""
-        info "Your existing database configuration is unchanged."
+        print_update_summary
         ;;
       *)
         echo ""
@@ -1305,6 +1321,8 @@ check_existing_install() {
     stop_stale_processes
     download_binary
     ok "Updated to $VERSION."
+    echo ""
+    print_update_summary
   fi
 
   if $explicit_reconfigure; then

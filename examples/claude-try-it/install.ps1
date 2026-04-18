@@ -1195,6 +1195,23 @@ function Set-ClaudeDesktopConfig {
 
 # --- Summary --------------------------------------------------------------
 
+function Write-UpdateSummary {
+    Write-Host ""
+    Write-Host (([string][char]0x2550) * 54)
+    Write-Host "  Update complete!"
+    Write-Host (([string][char]0x2550) * 54)
+    Write-Host ""
+    Write-Host "  Your existing database configuration is unchanged."
+    Write-Host ""
+    Write-Host "  Claude Code:    start a new conversation to use"
+    Write-Host "                  the updated server"
+    Write-Host "  Claude Desktop: restart the app to pick up the"
+    Write-Host "                  new version"
+    Write-Host ""
+    Write-Host (([string][char]0x2550) * 54)
+    Write-Host ""
+}
+
 function Write-Summary {
     Write-Host ""
     Write-Host (([string][char]0x2550) * 54) # horizontal double line
@@ -1302,7 +1319,7 @@ function Test-ExistingInstall {
             Install-Binary
             Write-Ok "Updated to $($script:Version)."
             Write-Host ""
-            Write-Info "Your existing database configuration is unchanged."
+            Write-UpdateSummary
         } else {
             Write-Host ""
             Write-Info "Skipping update. Exiting."
@@ -1311,6 +1328,8 @@ function Test-ExistingInstall {
         Stop-StaleProcesses
         Install-Binary
         Write-Ok "Updated to $($script:Version)."
+        Write-Host ""
+        Write-UpdateSummary
     }
 
     if ($explicitReconfigure) {
