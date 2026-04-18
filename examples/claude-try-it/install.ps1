@@ -371,6 +371,50 @@ function Find-FreePort {
     }
 }
 
+# --- Detect running Postgres instances -----------------------------------
+
+# Returns an array of [PSCustomObject]@{ Port; Confirmed }
+function Detect-PostgresInstances {
+    $results = @()
+    $hasPgReady = [bool](Get-Command pg_isready `
+        -ErrorAction SilentlyContinue)
+
+    foreach ($port in 5432, 5433, 5434, 5435, 5436) {
+        $listening = $false
+        $confirmed = $false
+
+        if ($hasPgReady) {
+            $prevPref = $ErrorActionPreference
+            $ErrorActionPreference = 'SilentlyContinue'
+            try {
+                & pg_isready -h localhost -p $port -t 2 2>$null | Out-Null
+                if ($LASTEXITCODE -eq 0) {
+                    $listening = $true
+                    $confirmed = $true
+                }
+            } catch {}
+            finally { $ErrorActionPreference = $prevPref }
+        }
+
+        if (-not $listening) {
+            $conn = Get-NetTCPConnection -LocalPort $port `
+                -State Listen -ErrorAction SilentlyContinue
+            if ($conn) {
+                $listening = $true
+            }
+        }
+
+        if ($listening) {
+            $results += [PSCustomObject]@{
+                Port = $port
+                Confirmed = $confirmed
+            }
+        }
+    }
+
+    return $results
+}
+
 # --- Remove old demo containers ------------------------------------------
 
 function Remove-OldDemos {
