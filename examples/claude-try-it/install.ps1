@@ -48,6 +48,8 @@ $script:DbUser       = $DbUser
 $script:DbPass       = $DbPass
 $script:DbConfigured = $false
 $script:DemoPort     = $DemoPort
+$script:AuthUser     = ""
+$script:DetectedInstances = @()
 
 # --- Helper functions -----------------------------------------------------
 
@@ -413,6 +415,260 @@ function Detect-PostgresInstances {
     }
 
     return $results
+}
+
+# --- Try passwordless auth -----------------------------------------------
+
+function Test-PasswordlessAuth {
+    param([int]$Port)
+    $script:AuthUser = ""
+
+    if (-not (Get-Command psql -ErrorAction SilentlyContinue)) {
+        return $false
+    }
+
+    # Try 'postgres' user
+    $env:PGPASSWORD = ""
+    $prevPref = $ErrorActionPreference
+    $ErrorActionPreference = 'SilentlyContinue'
+    try {
+        & psql -h localhost -p $Port -U postgres -w -c "SELECT 1" 2>$null | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            $script:AuthUser = "postgres"
+            $ErrorActionPreference = $prevPref
+            return $true
+        }
+    } catch {}
+
+    # Try current OS username
+    $osUser = $env:USERNAME
+    if ($osUser -ne "postgres") {
+        try {
+            & psql -h localhost -p $Port -U $osUser -w -c "SELECT 1" 2>$null | Out-Null
+            if ($LASTEXITCODE -eq 0) {
+                $script:AuthUser = $osUser
+                $ErrorActionPreference = $prevPref
+                return $true
+            }
+        } catch {}
+    }
+
+    $ErrorActionPreference = $prevPref
+    return $false
+}
+
+# --- List user databases -------------------------------------------------
+
+function Get-UserDatabases {
+    param([int]$Port, [string]$User, [string]$Password)
+    $env:PGPASSWORD = $Password
+    $prevPref = $ErrorActionPreference
+    $ErrorActionPreference = 'SilentlyContinue'
+    try {
+        $output = & psql -h localhost -p $Port -U $User -w -t -A -c @"
+SELECT datname FROM pg_database
+WHERE datistemplate = false
+  AND datname NOT IN ('postgres')
+ORDER BY datname
+"@ 2>$null
+        if ($LASTEXITCODE -eq 0 -and $output) {
+            return ($output | Where-Object {
+                -not [string]::IsNullOrWhiteSpace($_)
+            })
+        }
+    } catch {}
+    finally { $ErrorActionPreference = $prevPref }
+    return @()
+}
+
+# --- Connect to existing instance ----------------------------------------
+
+function Connect-ExistingInstance {
+    param([string]$TargetPort)
+
+    $hasPsql = [bool](Get-Command psql -ErrorAction SilentlyContinue)
+    $instances = $script:DetectedInstances
+
+    # Build combined database list
+    $options = @()
+
+    foreach ($inst in $instances) {
+        if ($TargetPort -and $inst.Port -ne [int]$TargetPort) { continue }
+
+        if ($hasPsql -and (Test-PasswordlessAuth -Port $inst.Port)) {
+            $dbs = Get-UserDatabases -Port $inst.Port `
+                -User $script:AuthUser -Password ""
+            Write-Host ""
+            Write-Host "    Port $($inst.Port) — connected as '$($script:AuthUser)'"
+            if ($dbs.Count -gt 0) {
+                foreach ($db in $dbs) {
+                    $options += [PSCustomObject]@{
+                        Type = "db"; Port = $inst.Port
+                        User = $script:AuthUser; Password = ""
+                        DbName = $db; InstIndex = $null
+                    }
+                    Write-Host "      $($options.Count)) $db"
+                }
+            } else {
+                Write-Host "      (no user databases found)"
+            }
+        } else {
+            Write-Host ""
+            if ($hasPsql) {
+                Write-Host "    Port $($inst.Port) — authentication required"
+            } else {
+                Write-Host "    Port $($inst.Port) — psql not installed, cannot list databases"
+            }
+            $options += [PSCustomObject]@{
+                Type = "auth"; Port = $inst.Port
+                User = ""; Password = ""
+                DbName = ""; InstIndex = $null
+            }
+            Write-Host "      $($options.Count)) Enter credentials for this instance"
+        }
+    }
+
+    Write-Host ""
+    Write-Host "    Other options:"
+    $options += [PSCustomObject]@{
+        Type = "demo"; Port = 0; User = ""; Password = ""
+        DbName = ""; InstIndex = $null
+    }
+    Write-Host "      $($options.Count)) Start a demo database instead (Docker, Northwind)"
+    $options += [PSCustomObject]@{
+        Type = "manual"; Port = 0; User = ""; Password = ""
+        DbName = ""; InstIndex = $null
+    }
+    Write-Host "      $($options.Count)) Enter connection details manually"
+    Write-Host ""
+
+    $choice = Read-Prompt "  Enter a number" "1"
+
+    if ($choice -match '^\d+$') {
+        $idx = [int]$choice - 1
+    } else {
+        Write-Info "Defaulting to demo database..."
+        Start-DemoDatabase
+        return
+    }
+
+    if ($idx -lt 0 -or $idx -ge $options.Count) {
+        Write-Warn "Invalid choice. Defaulting to demo database."
+        Start-DemoDatabase
+        return
+    }
+
+    $selected = $options[$idx]
+    switch ($selected.Type) {
+        "db" {
+            $script:DbHost = "localhost"
+            $script:DbPort = "$($selected.Port)"
+            $script:DbName = $selected.DbName
+            $script:DbUser = $selected.User
+            $script:DbPass = $selected.Password
+            $script:DbConfigured = $true
+            Write-Ok "Using database: $($selected.DbName) on localhost:$($selected.Port) ($($selected.User))"
+        }
+        "auth" {
+            Invoke-CredentialPrompt -Port $selected.Port
+        }
+        "demo" {
+            Start-DemoDatabase
+        }
+        "manual" {
+            Set-OwnDatabase
+        }
+    }
+}
+
+# --- Prompt for credentials and list databases ----------------------------
+
+function Invoke-CredentialPrompt {
+    param([int]$Port)
+    $attempts = 0
+
+    while ($attempts -lt 2) {
+        Write-Host ""
+        Write-Host "  Connection to port $Port requires authentication."
+        Write-Host ""
+
+        $user = Read-Prompt "  Username [postgres]" "postgres"
+
+        if (Test-Interactive) {
+            if ($PSVersionTable.PSVersion.Major -ge 7) {
+                $pass = Read-Host -Prompt "  Password" -MaskInput
+            } else {
+                $secure = Read-Host -Prompt "  Password" -AsSecureString
+                $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+                try {
+                    $pass = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+                } finally {
+                    [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+                }
+            }
+        } else {
+            $pass = ""
+        }
+
+        $env:PGPASSWORD = $pass
+        $prevPref = $ErrorActionPreference
+        $ErrorActionPreference = 'SilentlyContinue'
+        try {
+            & psql -h localhost -p $Port -U $user -w -c "SELECT 1" 2>$null | Out-Null
+            if ($LASTEXITCODE -eq 0) {
+                $ErrorActionPreference = $prevPref
+                Write-Ok "Connected to port $Port as '$user'"
+
+                $dbs = Get-UserDatabases -Port $Port -User $user -Password $pass
+                if ($dbs.Count -gt 0) {
+                    Write-Host ""
+                    Write-Host "  Databases on port ${Port}:"
+                    for ($i = 0; $i -lt $dbs.Count; $i++) {
+                        Write-Host "    $($i + 1)) $($dbs[$i])"
+                    }
+                    Write-Host ""
+
+                    $dbChoice = Read-Prompt "  Enter a number (or type a database name)" "1"
+                    if ($dbChoice -match '^\d+$') {
+                        $dbIdx = [int]$dbChoice - 1
+                        if ($dbIdx -ge 0 -and $dbIdx -lt $dbs.Count) {
+                            $script:DbName = $dbs[$dbIdx]
+                        } else {
+                            $script:DbName = $dbChoice
+                        }
+                    } else {
+                        $script:DbName = $dbChoice
+                    }
+                } else {
+                    Write-Host ""
+                    Write-Host "  No user databases found on port $Port."
+                    Write-Host ""
+                    $script:DbName = Read-Prompt "  Database name" ""
+                    if (-not $script:DbName) {
+                        Write-Warn "Database name is required."
+                        $script:DbConfigured = $false
+                        return
+                    }
+                }
+
+                $script:DbHost = "localhost"
+                $script:DbPort = "$Port"
+                $script:DbUser = $user
+                $script:DbPass = $pass
+                $script:DbConfigured = $true
+                Write-Ok "Using database: $($script:DbName) on localhost:$Port ($user)"
+                return
+            }
+        } catch {}
+        finally { $ErrorActionPreference = $prevPref }
+
+        Write-Warn "Authentication failed."
+        $attempts++
+    }
+
+    Write-Warn "Could not connect to port $Port. Try the manual option."
+    Write-Host ""
+    Set-OwnDatabase
 }
 
 # --- Remove old demo containers ------------------------------------------
