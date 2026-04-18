@@ -9,6 +9,17 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Installer improvements
+
+- Fixed port detection on Windows; the installer now reliably
+  detects Postgres instances on all network addresses.
+
+- The installer detects running Postgres instances and offers
+  to connect to them, with automatic database listing.
+
+- Added `--detect` / `-Detect` flag for non-interactive
+  auto-connection to detected Postgres instances.
+
 ### Added
 
 - Schema metadata cache now refreshes automatically based on a
