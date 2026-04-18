@@ -142,6 +142,7 @@ download_binary() {
   chmod +x "$BIN_DIR/pgedge-postgres-mcp"
   rm -rf "$tmp_dir"
 
+  echo "$VERSION" > "$BIN_DIR/.version"
   ok "Binary installed: $BIN_DIR/pgedge-postgres-mcp"
 }
 
@@ -1208,6 +1209,84 @@ print_summary() {
   echo ""
 }
 
+# ─── Stop stale MCP server processes ─────────────────────────────────────────
+
+stop_stale_processes() {
+  local count
+  count=$(pgrep -fc pgedge-postgres-mcp 2>/dev/null || true)
+  if [ "$count" -gt 0 ] 2>/dev/null; then
+    info "Stopping $count running MCP server process(es)..."
+    pkill -f pgedge-postgres-mcp 2>/dev/null || true
+    sleep 1
+  fi
+}
+
+# ─── Check for existing installation ────────────────────────────────────────
+
+check_existing_install() {
+  local binary="$BIN_DIR/pgedge-postgres-mcp"
+  [ -f "$binary" ] || return 1
+
+  local installed_version=""
+  if [ -f "$BIN_DIR/.version" ]; then
+    installed_version=$(cat "$BIN_DIR/.version")
+  fi
+
+  if [ "$installed_version" = "$VERSION" ]; then
+    echo ""
+    ok "pgEdge MCP Server $VERSION is already up to date."
+    echo ""
+    if [ -t 0 ]; then
+      local reconfigure
+      ask "  Want to reconfigure the database connection? (y/n): " reconfigure
+      case "$reconfigure" in
+        [Yy]*)
+          echo ""
+          choose_database
+          echo ""
+          configure_claude_code
+          configure_claude_desktop
+          print_summary
+          ;;
+        *)
+          echo ""
+          info "Nothing to do. Exiting."
+          ;;
+      esac
+    else
+      info "Already up to date. Nothing to do."
+    fi
+    exit 0
+  fi
+
+  echo ""
+  info "pgEdge MCP Server ${installed_version:-unknown} is installed."
+  ok "A newer version ($VERSION) is available."
+  echo ""
+  if [ -t 0 ]; then
+    local update
+    ask "  Update? (y/n): " update
+    case "$update" in
+      [Yy]*)
+        stop_stale_processes
+        download_binary
+        ok "Updated to $VERSION."
+        echo ""
+        info "Your existing database configuration is unchanged."
+        ;;
+      *)
+        echo ""
+        info "Skipping update. Exiting."
+        ;;
+    esac
+  else
+    stop_stale_processes
+    download_binary
+    ok "Updated to $VERSION."
+  fi
+  exit 0
+}
+
 # ─── Main ────────────────────────────────────────────────────────────────────
 
 main() {
@@ -1225,6 +1304,7 @@ main() {
 
   detect_platform
   get_latest_version
+  check_existing_install || true
   download_binary
 
   echo ""

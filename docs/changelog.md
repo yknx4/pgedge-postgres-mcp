@@ -17,6 +17,10 @@ and this project adheres to
 - Added `--detect` / `-Detect` flag for non-interactive
   auto-connection to detected Postgres instances.
 
+- The installer detects previous installations and offers
+  to update the binary or reconfigure the database connection
+  instead of re-running the full install flow.
+
 - Schema metadata cache now refreshes automatically based on a
   configurable TTL. The `metadata_ttl` database option controls
   how long cached metadata remains valid (default: 5 minutes).

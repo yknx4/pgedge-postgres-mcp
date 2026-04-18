@@ -138,6 +138,7 @@ function Install-Binary {
 
     Copy-Item $source.FullName (Join-Path $BinDir $binaryName) -Force
     Remove-Item $tmpDir -Recurse -Force
+    Set-Content -Path (Join-Path $BinDir ".version") -Value $script:Version
 
     Write-Ok "Binary installed: $(Join-Path $BinDir $binaryName)"
 }
@@ -1211,6 +1212,84 @@ function Write-Summary {
     Write-Host ""
 }
 
+# --- Stop stale MCP server processes --------------------------------------
+
+function Stop-StaleProcesses {
+    $procs = Get-Process | Where-Object {
+        $_.Path -like '*pgedge-postgres-mcp*'
+    } -ErrorAction SilentlyContinue
+    if ($procs) {
+        $count = @($procs).Count
+        Write-Info "Stopping $count running MCP server process(es)..."
+        $procs | Stop-Process -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 1
+    }
+}
+
+# --- Check for existing installation -------------------------------------
+
+function Test-ExistingInstall {
+    $binaryExt = if ($script:OS -eq "windows") { ".exe" } else { "" }
+    $binary = Join-Path $BinDir "pgedge-postgres-mcp$binaryExt"
+    if (-not (Test-Path $binary)) { return $false }
+
+    $versionFile = Join-Path $BinDir ".version"
+    $installedVersion = ""
+    if (Test-Path $versionFile) {
+        $installedVersion = (Get-Content $versionFile -Raw).Trim()
+    }
+
+    if ($installedVersion -eq $script:Version) {
+        Write-Host ""
+        Write-Ok "pgEdge MCP Server $($script:Version) is already up to date."
+        Write-Host ""
+        if (Test-Interactive) {
+            $reconfigure = Read-Prompt "  Want to reconfigure the database connection? (y/n)" "n"
+            if ($reconfigure -match '^[Yy]') {
+                Write-Host ""
+                Select-Database
+                Write-Host ""
+                Set-ClaudeCodeConfig
+                Set-ClaudeDesktopConfig
+                Write-Summary
+            } else {
+                Write-Host ""
+                Write-Info "Nothing to do. Exiting."
+            }
+        } else {
+            Write-Info "Already up to date. Nothing to do."
+        }
+        return $true
+    }
+
+    Write-Host ""
+    if ($installedVersion) {
+        Write-Info "pgEdge MCP Server $installedVersion is installed."
+    } else {
+        Write-Info "pgEdge MCP Server (unknown version) is installed."
+    }
+    Write-Ok "A newer version ($($script:Version)) is available."
+    Write-Host ""
+    if (Test-Interactive) {
+        $update = Read-Prompt "  Update? (y/n)" "y"
+        if ($update -match '^[Yy]') {
+            Stop-StaleProcesses
+            Install-Binary
+            Write-Ok "Updated to $($script:Version)."
+            Write-Host ""
+            Write-Info "Your existing database configuration is unchanged."
+        } else {
+            Write-Host ""
+            Write-Info "Skipping update. Exiting."
+        }
+    } else {
+        Stop-StaleProcesses
+        Install-Binary
+        Write-Ok "Updated to $($script:Version)."
+    }
+    return $true
+}
+
 # --- Main -----------------------------------------------------------------
 
 function Main {
@@ -1228,6 +1307,9 @@ function Main {
 
     Get-Platform
     Get-LatestVersion
+
+    if (Test-ExistingInstall) { return }
+
     Install-Binary
 
     Write-Host ""
