@@ -362,6 +362,47 @@ find_free_port() {
     || echo "0"
 }
 
+# ─── Detect running Postgres instances ─────────────────────────────────
+
+# Populates two parallel arrays:
+#   DETECTED_PORTS[]    — port numbers with listeners
+#   DETECTED_CONFIRMED[] — "true" if pg_isready confirmed Postgres
+detect_postgres_instances() {
+  DETECTED_PORTS=()
+  DETECTED_CONFIRMED=()
+
+  local has_pgready=false
+  command -v pg_isready &>/dev/null && has_pgready=true
+
+  for port in 5432 5433 5434 5435 5436; do
+    local listening=false confirmed=false
+
+    if $has_pgready; then
+      if pg_isready -h localhost -p "$port" -t 2 >/dev/null 2>&1; then
+        listening=true
+        confirmed=true
+      fi
+    fi
+
+    if ! $listening; then
+      if command -v lsof &>/dev/null; then
+        if lsof -iTCP:"$port" -sTCP:LISTEN -P -n >/dev/null 2>&1; then
+          listening=true
+        fi
+      elif command -v ss &>/dev/null; then
+        if ss -tlnH "sport = :$port" 2>/dev/null | grep -q .; then
+          listening=true
+        fi
+      fi
+    fi
+
+    if $listening; then
+      DETECTED_PORTS+=("$port")
+      DETECTED_CONFIRMED+=("$confirmed")
+    fi
+  done
+}
+
 # ─── Clean up old demo containers ─────────────────────────────────────────
 
 cleanup_old_demos() {
