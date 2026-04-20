@@ -1271,7 +1271,7 @@ function Stop-StaleProcesses {
 # --- Check for existing installation -------------------------------------
 
 function Test-ExistingInstall {
-    $explicitReconfigure = $Detect -or $Demo -or $OwnDb
+    $explicitReconfigure = $Detect -or $Demo -or $OwnDb -or $InstallDocker
     $binaryExt = if ($script:OS -eq "windows") { ".exe" } else { "" }
     $binary = Join-Path $BinDir "pgedge-postgres-mcp$binaryExt"
     if (-not (Test-Path $binary)) { return $false }

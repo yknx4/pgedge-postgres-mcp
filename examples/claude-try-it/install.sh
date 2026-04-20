@@ -794,7 +794,7 @@ connect_existing_auto() {
       if [ -n "$DB_NAME" ]; then
         local dbs
         dbs=$(list_databases "$port" "$AUTH_USER" "")
-        if echo "$dbs" | grep -qx "$DB_NAME"; then
+        if echo "$dbs" | grep -Fqx -- "$DB_NAME"; then
           DB_HOST="localhost"; DB_PORT="$port"
           DB_USER="$AUTH_USER"; DB_PASS=""
           DB_CONFIGURED=true
@@ -1247,10 +1247,10 @@ print_summary() {
 
 stop_stale_processes() {
   local count
-  count=$(pgrep -fc pgedge-postgres-mcp 2>/dev/null || true)
+  count=$(pgrep -fc '(^|/)pgedge-postgres-mcp( |$)' 2>/dev/null || true)
   if [ "$count" -gt 0 ] 2>/dev/null; then
     info "Stopping $count running MCP server process(es)..."
-    pkill -f pgedge-postgres-mcp 2>/dev/null || true
+    pkill -f '(^|/)pgedge-postgres-mcp( |$)' 2>/dev/null || true
     sleep 1
   fi
 }
@@ -1281,7 +1281,7 @@ check_existing_install() {
         configure_claude_desktop
         print_summary
       fi
-    elif [ -t 0 ]; then
+    elif has_tty; then
       local reconfigure
       ask "  Want to reconfigure the database connection? (y/n): " reconfigure
       case "$reconfigure" in
@@ -1314,7 +1314,7 @@ check_existing_install() {
   info "pgEdge MCP Server ${installed_version:-unknown} is installed."
   ok "A newer version ($VERSION) is available."
   echo ""
-  if [ -t 0 ]; then
+  if has_tty; then
     local update
     ask "  Update? (y/n): " update
     case "$update" in
