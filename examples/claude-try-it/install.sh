@@ -1250,10 +1250,10 @@ print_summary() {
 
 stop_stale_processes() {
   local count
-  count=$(pgrep -xc pgedge-postgres-mcp 2>/dev/null || true)
+  count=$(pgrep -fc '(^|/)pgedge-postgres-mcp( |$)' 2>/dev/null || true)
   if [ "$count" -gt 0 ] 2>/dev/null; then
     info "Stopping $count running MCP server process(es)..."
-    pkill -x pgedge-postgres-mcp 2>/dev/null || true
+    pkill -f '(^|/)pgedge-postgres-mcp( |$)' 2>/dev/null || true
     sleep 1
   fi
 }
