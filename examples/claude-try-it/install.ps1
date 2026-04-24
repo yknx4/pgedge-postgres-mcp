@@ -231,7 +231,7 @@ function Select-Database {
         return
     }
     if ($Detect) {
-        $script:DetectedInstances = Detect-PostgresInstances
+        $script:DetectedInstances = Find-PostgresInstance
         if ($script:DetectedInstances.Count -eq 0) {
             Write-Host ""
             Write-Host "DETECT_NO_INSTANCES"
@@ -245,7 +245,7 @@ function Select-Database {
     }
 
     # Detect instances
-    $script:DetectedInstances = Detect-PostgresInstances
+    $script:DetectedInstances = Find-PostgresInstance
 
     # Non-interactive — output choices for Claude
     if (-not (Test-Interactive)) {
@@ -455,7 +455,7 @@ function Find-FreePort {
 # --- Detect running Postgres instances -----------------------------------
 
 # Returns an array of [PSCustomObject]@{ Port; Confirmed }
-function Detect-PostgresInstances {
+function Find-PostgresInstance {
     $results = @()
     $hasPgReady = [bool](Get-Command pg_isready `
         -ErrorAction SilentlyContinue)
@@ -1049,8 +1049,10 @@ function Set-OwnDatabase {
     Write-Host "  Enter your PostgreSQL connection details:"
     Write-Host ""
 
-    $script:DbHost = Read-Prompt "  Host [localhost]" "localhost"
-    $script:DbPort = Read-Prompt "  Port [5432]" "5432"
+    $defaultHost = if ($script:DbHost) { $script:DbHost } else { "localhost" }
+    $defaultPort = if ($script:DbPort) { $script:DbPort } else { "5432" }
+    $script:DbHost = Read-Prompt "  Host [$defaultHost]" $defaultHost
+    $script:DbPort = Read-Prompt "  Port [$defaultPort]" $defaultPort
     $script:DbName = Read-Prompt "  Database name" ""
     if (-not $script:DbName) { Write-Warn "Database name is required."; $script:DbConfigured = $false; return }
     $script:DbUser = Read-Prompt "  Username" ""
@@ -1257,9 +1259,7 @@ function Write-Summary {
 # --- Stop stale MCP server processes --------------------------------------
 
 function Stop-StaleProcesses {
-    $procs = Get-Process | Where-Object {
-        $_.Path -like '*pgedge-postgres-mcp*'
-    } -ErrorAction SilentlyContinue
+    $procs = Get-Process -Name 'pgedge-postgres-mcp' -ErrorAction SilentlyContinue
     if ($procs) {
         $count = @($procs).Count
         Write-Info "Stopping $count running MCP server process(es)..."
@@ -1279,7 +1279,8 @@ function Test-ExistingInstall {
     $versionFile = Join-Path $BinDir ".version"
     $installedVersion = ""
     if (Test-Path $versionFile) {
-        $installedVersion = (Get-Content $versionFile -Raw).Trim()
+        $raw = Get-Content $versionFile -Raw
+        if ($null -ne $raw) { $installedVersion = $raw.Trim() }
     }
 
     if ($installedVersion -eq $script:Version) {
@@ -1334,7 +1335,7 @@ function Test-ExistingInstall {
             Install-Binary
             Write-Ok "Updated to $($script:Version)."
             Write-Host ""
-            Write-UpdateSummary
+            if (-not $explicitReconfigure) { Write-UpdateSummary }
         } else {
             Write-Host ""
             Write-Info "Skipping update. Exiting."
@@ -1344,7 +1345,7 @@ function Test-ExistingInstall {
         Install-Binary
         Write-Ok "Updated to $($script:Version)."
         Write-Host ""
-        Write-UpdateSummary
+        if (-not $explicitReconfigure) { Write-UpdateSummary }
     }
 
     if ($explicitReconfigure) {
@@ -1384,9 +1385,11 @@ function Main {
     Write-Host ""
     Select-Database
 
-    Write-Host ""
-    Set-ClaudeCodeConfig
-    Set-ClaudeDesktopConfig
+    if ($script:DbConfigured) {
+        Write-Host ""
+        Set-ClaudeCodeConfig
+        Set-ClaudeDesktopConfig
+    }
 
     Write-Summary
 }

@@ -1038,11 +1038,13 @@ setup_own_database() {
   echo "  Enter your PostgreSQL connection details:"
   echo ""
 
-  ask "  Host [localhost]: " DB_HOST
-  DB_HOST="${DB_HOST:-localhost}"
+  local default_host="${DB_HOST:-localhost}"
+  ask "  Host [$default_host]: " DB_HOST
+  DB_HOST="${DB_HOST:-$default_host}"
 
-  ask "  Port [5432]: " DB_PORT
-  DB_PORT="${DB_PORT:-5432}"
+  local default_port="${DB_PORT:-5432}"
+  ask "  Port [$default_port]: " DB_PORT
+  DB_PORT="${DB_PORT:-$default_port}"
 
   ask "  Database name: " DB_NAME
   [ -z "$DB_NAME" ] && { warn "Database name is required."; DB_CONFIGURED=false; return; }
@@ -1247,10 +1249,10 @@ print_summary() {
 
 stop_stale_processes() {
   local count
-  count=$(pgrep -fc '(^|/)pgedge-postgres-mcp( |$)' 2>/dev/null || true)
+  count=$(pgrep -xc pgedge-postgres-mcp 2>/dev/null || true)
   if [ "$count" -gt 0 ] 2>/dev/null; then
     info "Stopping $count running MCP server process(es)..."
-    pkill -f '(^|/)pgedge-postgres-mcp( |$)' 2>/dev/null || true
+    pkill -x pgedge-postgres-mcp 2>/dev/null || true
     sleep 1
   fi
 }
@@ -1322,8 +1324,10 @@ check_existing_install() {
         stop_stale_processes
         download_binary
         ok "Updated to $VERSION."
-        echo ""
-        print_update_summary
+        if ! $explicit_reconfigure; then
+          echo ""
+          print_update_summary
+        fi
         ;;
       *)
         echo ""
@@ -1334,8 +1338,10 @@ check_existing_install() {
     stop_stale_processes
     download_binary
     ok "Updated to $VERSION."
-    echo ""
-    print_update_summary
+    if ! $explicit_reconfigure; then
+      echo ""
+      print_update_summary
+    fi
   fi
 
   if $explicit_reconfigure; then
@@ -1373,11 +1379,13 @@ main() {
   echo ""
   choose_database
 
-  echo ""
-  configure_claude_code
-  configure_claude_desktop
+  if [ "$DB_CONFIGURED" = true ]; then
+    echo ""
+    configure_claude_code
+    configure_claude_desktop
 
-  print_summary
+    print_summary
+  fi
 }
 
 main "$@"
