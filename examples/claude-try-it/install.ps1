@@ -1339,6 +1339,7 @@ function Test-ExistingInstall {
         } else {
             Write-Host ""
             Write-Info "Skipping update. Exiting."
+            return $true
         }
     } else {
         Stop-StaleProcesses
@@ -1389,9 +1390,8 @@ function Main {
         Write-Host ""
         Set-ClaudeCodeConfig
         Set-ClaudeDesktopConfig
+        Write-Summary
     }
-
-    Write-Summary
 }
 
 Main

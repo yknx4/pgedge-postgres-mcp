@@ -590,7 +590,8 @@ connect_existing_instance() {
 
   if [ ${#inst_ports[@]} -eq 0 ]; then
     warn "No instances to connect to."
-    return 1
+    DB_CONFIGURED=false
+    return
   fi
 
   # --- Present the combined menu ---
@@ -1332,6 +1333,7 @@ check_existing_install() {
       *)
         echo ""
         info "Skipping update. Exiting."
+        exit 0
         ;;
     esac
   else
