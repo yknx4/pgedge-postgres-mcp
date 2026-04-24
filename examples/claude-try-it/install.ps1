@@ -581,8 +581,9 @@ function Connect-ExistingInstance {
         if ($hasPsql -and (Test-PasswordlessAuth -Port $inst.Port)) {
             $dbs = @(Get-UserDatabases -Port $inst.Port `
                 -User $script:AuthUser -Password "")
+            $label = if ($inst.Confirmed) { "PostgreSQL" } else { "service (likely PostgreSQL)" }
             Write-Host ""
-            Write-Host "    Port $($inst.Port) — connected as '$($script:AuthUser)'"
+            Write-Host "    Port $($inst.Port) ($label) — connected as '$($script:AuthUser)'"
             if ($dbs.Count -gt 0) {
                 foreach ($db in $dbs) {
                     $options += [PSCustomObject]@{
@@ -615,6 +616,12 @@ function Connect-ExistingInstance {
                 Write-Host "      $($options.Count)) Enter connection details for port $($inst.Port)"
             }
         }
+    }
+
+    if ($options.Count -eq 0) {
+        Write-Warn "No instances to connect to."
+        $script:DbConfigured = $false
+        return
     }
 
     Write-Host ""
@@ -1181,8 +1188,8 @@ function Set-ClaudeDesktopConfig {
             $raw = Get-Content $configFile -Raw
             $config = $raw | ConvertFrom-Json
         } catch {
-            Write-Warn "Claude Desktop config ($configFile) contains invalid JSON — skipping to avoid overwriting."
-            return
+            Write-Warn "Claude Desktop config ($configFile) contains invalid JSON — backing up to $configFile.bak"
+            Rename-Item $configFile "$configFile.bak" -Force
         }
     }
 
@@ -1209,7 +1216,6 @@ function Set-ClaudeDesktopConfig {
 # --- Summary --------------------------------------------------------------
 
 function Write-UpdateSummary {
-    Write-Host ""
     Write-Host (([string][char]0x2550) * 54)
     Write-Host "  Update complete!"
     Write-Host (([string][char]0x2550) * 54)

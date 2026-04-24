@@ -1287,6 +1287,7 @@ check_existing_install() {
     elif has_tty; then
       local reconfigure
       ask "  Want to reconfigure the database connection? (y/n): " reconfigure
+      reconfigure="${reconfigure:-n}"
       case "$reconfigure" in
         [Yy]*)
           echo ""
@@ -1320,6 +1321,7 @@ check_existing_install() {
   if has_tty; then
     local update
     ask "  Update? (y/n): " update
+    update="${update:-y}"
     case "$update" in
       [Yy]*)
         stop_stale_processes
