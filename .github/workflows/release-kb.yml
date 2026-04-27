@@ -49,6 +49,7 @@ jobs:
               run: |
                   [ -n "$PGEDGE_BUILDER_TOKEN" ] || { echo "PGEDGE_BUILDER_TOKEN secret is missing"; exit 1; }
                   echo "GIT_CONFIG_GLOBAL=$RUNNER_TEMP/gitconfig" >> "$GITHUB_ENV"
+                  printf '' > "$RUNNER_TEMP/gitconfig"
                   GIT_CONFIG_GLOBAL="$RUNNER_TEMP/gitconfig" git config --global credential.helper ""
                   GIT_CONFIG_GLOBAL="$RUNNER_TEMP/gitconfig" git config --global url."https://x-access-token:${PGEDGE_BUILDER_TOKEN}@github.com/".insteadOf "https://github.com/"
 
