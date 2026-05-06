@@ -269,6 +269,9 @@ jobs:
                                   fixed = (fixed[:after_sources + insert_before]
                                            + new_block.lstrip("\n") + "\n\n"
                                            + fixed[after_sources + insert_before:])
+                              elif not cur_matches:
+                                  # Guard: prior insertion disrupted structure — append at sources end
+                                  fixed = fixed[:sources_end] + "\n" + new_block + "\n" + fixed[sources_end:]
                               else:
                                   # New version is lowest — append after last matching entry
                                   last = cur_matches[-1]
