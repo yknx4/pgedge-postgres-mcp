@@ -9,6 +9,35 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- Metadata loader now tolerates tables with zero columns
+  (e.g. `CREATE TABLE foo()`). The query LEFT JOINs against the
+  per-column catalog, so a zero-column table produced a row whose
+  `column_name`, `data_type`, and `is_nullable` were all NULL; the
+  scan declared those targets as plain `string` and aborted with
+  `cannot scan NULL into *string`, failing the entire metadata load
+  and surfacing as the misleading `no database connection
+  configured for this token` error. The three columns are now
+  scanned as `sql.NullString` and zero-column tables appear in the
+  metadata with an empty `Columns` slice. (#126)
+- HTTP transport now returns `202 Accepted` with an empty body for
+  JSON-RPC notifications, per JSON-RPC 2.0 §4.1 and the MCP streamable
+  HTTP transport spec. Previously, the server replied to notifications
+  with a `200 OK` response that had no `id` field, which is itself not
+  a valid JSON-RPC message and caused strict clients (such as the .NET
+  MCP SDK) to throw on every notification. Unknown notification methods
+  are now also acknowledged silently rather than receiving a `-32601`
+  error reply. (#142)
+
+- Database switching via `select_database_connection` now persists
+  correctly in HTTP mode for unbound API tokens.
+  `GetAccessibleDatabases` previously returned only the first
+  configured database for unbound tokens, causing `getClient` to
+  silently override the user's selection on every subsequent tool
+  call. The method now returns all databases, matching the behavior
+  of `CanAccessDatabase`. (#117)
+
 ### Added
 
 - The installer detects running Postgres instances and offers
