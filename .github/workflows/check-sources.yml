@@ -212,10 +212,12 @@ jobs:
 
                   def sources_bounds(text):
                       """Return (after_sources, sources_end) positions."""
-                      sm = re.search(r'(?m)^sources:\s*$', text)
+                      sm = re.search(r'(?m)^sources:', text)
                       if not sm:
                           return None, None
-                      ns = re.search(r'(?m)^(?!\s|#)[^:]+:\s*$', text[sm.end():])
+                      # Match any top-level key (with or without an inline value)
+                      # e.g. "embeddings:", "kind: kb-builder", "version: 2"
+                      ns = re.search(r'(?m)^(?!\s|#)[^:\n]+:', text[sm.end():])
                       return sm.end(), sm.end() + ns.start() if ns else len(text)
 
                   for norm_url, grp in url_groups.items():
