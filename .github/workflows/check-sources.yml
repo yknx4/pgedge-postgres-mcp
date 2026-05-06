@@ -208,7 +208,18 @@ jobs:
                           block += f"\n      project_version: \"{e.get('version')}\""
                       new_entries.append(block)
 
-                  fixed = fixed.rstrip() + "\n" + "\n".join(new_entries) + "\n"
+                  # Insert inside the sources: block, before the next top-level section
+                  sources_match = re.search(r'\nsources:', fixed)
+                  if sources_match:
+                      after_sources = sources_match.end()
+                      next_section = re.search(r'\n([a-z_][a-z_]*:)', fixed[after_sources:])
+                      if next_section:
+                          insert_at = after_sources + next_section.start(0)
+                          fixed = fixed[:insert_at] + "\n" + "\n".join(new_entries) + fixed[insert_at:]
+                      else:
+                          fixed = fixed.rstrip() + "\n" + "\n".join(new_entries) + "\n"
+                  else:
+                      fixed = fixed.rstrip() + "\n" + "\n".join(new_entries) + "\n"
 
               with open(CONSUMER_FILE, "w") as f:
                   f.write(fixed)
