@@ -282,6 +282,7 @@ jobs:
         env:
           FIX_BRANCH: ${{ steps.push.outputs.fix_branch }}
           BASE_BRANCH: ${{ steps.push.outputs.base_branch }}
+          PUSHED: ${{ steps.push.outputs.pushed }}
         with:
           github-token: ${{ secrets.PGEDGE_BUILDER_TOKEN }}
           script: |
@@ -289,6 +290,7 @@ jobs:
             const body = fs.readFileSync('/tmp/drift-report.md', 'utf8');
             const fixBranch = process.env.FIX_BRANCH;
             const baseBranch = process.env.BASE_BRANCH;
+            const pushed = process.env.PUSHED === 'true';
             const [owner, repo] = process.env.GITHUB_REPOSITORY.split('/');
 
             const { data: prs } = await github.rest.pulls.list({
@@ -298,13 +300,18 @@ jobs:
             });
 
             if (prs.length > 0) {
-              const prNumber = prs[0].number;
-              console.log(`Updating existing PR #${prNumber}`);
-              await github.rest.issues.createComment({
-                owner, repo,
-                issue_number: prNumber,
-                body,
-              });
+              if (pushed) {
+                // New content was pushed — update the PR body to reflect latest drift
+                const prNumber = prs[0].number;
+                console.log(`Updating PR #${prNumber} body`);
+                await github.rest.pulls.update({
+                  owner, repo,
+                  pull_number: prNumber,
+                  body,
+                });
+              } else {
+                console.log(`PR already open and branch unchanged — no update needed`);
+              }
             } else {
               console.log('Creating new fix PR');
               await github.rest.pulls.create({
