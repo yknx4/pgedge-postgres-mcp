@@ -232,21 +232,37 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           gh auth setup-git
 
+          # Save generated content before stashing so we can compare later
+          cp examples/pgedge-nla-kb-builder.yaml /tmp/kb_builder_generated.yaml
+
           # Stash the Python-generated changes before switching branches
           git stash
-          STASHED=$( git stash list | head -1 )
 
-          # Ensure base branch and fix branch refs are current
+          # Fetch both branches so we can compare and reset
           git fetch origin "$BASE_BRANCH"
           git fetch origin "$FIX_BRANCH" 2>/dev/null || true
+
+          # If the fix branch already exists, skip the push when the generated
+          # content is identical to what's already on it — this preserves any
+          # open PR approvals and avoids spurious force-pushes.
+          if git rev-parse --verify "origin/$FIX_BRANCH" &>/dev/null; then
+            EXISTING=$(git show "origin/$FIX_BRANCH:examples/pgedge-nla-kb-builder.yaml" 2>/dev/null || echo "")
+            GENERATED=$(cat /tmp/kb_builder_generated.yaml)
+            if [ "$EXISTING" = "$GENERATED" ]; then
+              echo "Fix branch already contains identical changes — skipping push to preserve PR approvals."
+              echo "pushed=false" >> "$GITHUB_OUTPUT"
+              echo "branch_ready=true" >> "$GITHUB_OUTPUT"
+              echo "fix_branch=$FIX_BRANCH" >> "$GITHUB_OUTPUT"
+              echo "base_branch=$BASE_BRANCH" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
 
           # Create or force-reset fix branch to tip of base branch
           git checkout -B "$FIX_BRANCH" "origin/$BASE_BRANCH"
 
-          # Restore the fixes onto the fix branch (only if something was stashed)
-          if [ -n "$STASHED" ]; then
-            git stash pop
-          fi
+          # Restore the fixes onto the fix branch
+          git stash pop
 
           git add examples/pgedge-nla-kb-builder.yaml
           if git diff --cached --quiet; then
@@ -261,11 +277,12 @@ jobs:
           echo "base_branch=$BASE_BRANCH" >> "$GITHUB_OUTPUT"
 
       - name: Create or update fix PR
-        if: steps.push.outputs.pushed == 'true'
+        if: steps.push.outputs.pushed == 'true' || steps.push.outputs.branch_ready == 'true'
         uses: actions/github-script@v7
         env:
           FIX_BRANCH: ${{ steps.push.outputs.fix_branch }}
           BASE_BRANCH: ${{ steps.push.outputs.base_branch }}
+          PUSHED: ${{ steps.push.outputs.pushed }}
         with:
           github-token: ${{ secrets.PGEDGE_BUILDER_TOKEN }}
           script: |
@@ -273,6 +290,7 @@ jobs:
             const body = fs.readFileSync('/tmp/drift-report.md', 'utf8');
             const fixBranch = process.env.FIX_BRANCH;
             const baseBranch = process.env.BASE_BRANCH;
+            const pushed = process.env.PUSHED === 'true';
             const [owner, repo] = process.env.GITHUB_REPOSITORY.split('/');
 
             const { data: prs } = await github.rest.pulls.list({
@@ -282,13 +300,18 @@ jobs:
             });
 
             if (prs.length > 0) {
-              const prNumber = prs[0].number;
-              console.log(`Updating existing PR #${prNumber}`);
-              await github.rest.issues.createComment({
-                owner, repo,
-                issue_number: prNumber,
-                body,
-              });
+              if (pushed) {
+                // New content was pushed — update the PR body to reflect latest drift
+                const prNumber = prs[0].number;
+                console.log(`Updating PR #${prNumber} body`);
+                await github.rest.pulls.update({
+                  owner, repo,
+                  pull_number: prNumber,
+                  body,
+                });
+              } else {
+                console.log(`PR already open and branch unchanged — no update needed`);
+              }
             } else {
               console.log('Creating new fix PR');
               await github.rest.pulls.create({
