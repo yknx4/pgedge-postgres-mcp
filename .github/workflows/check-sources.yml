@@ -219,24 +219,67 @@ jobs:
                       return sm.end(), sm.end() + ns.start() if ns else len(text)
 
                   for norm_url, grp in url_groups.items():
-                      group_text = grp["comment"] + "".join(grp["blocks"])
                       after_sources, sources_end = sources_bounds(fixed)
                       if after_sources is None:
-                          fixed = fixed.rstrip() + "\n" + group_text + "\n"
+                          fixed = fixed.rstrip() + "\n" + grp["comment"] + "".join(grp["blocks"]) + "\n"
                           continue
                       sources_text = fixed[after_sources:sources_end]
-                      # Find the last entry in sources with this URL
-                      matches = list(re.finditer(re.escape(grp["raw_url"]), sources_text, re.IGNORECASE))
+                      # Find all existing entries with a normalized-equal URL.
+                      # Normalized comparison handles missing .git, case, etc.
+                      matches = [
+                          m for m in re.finditer(
+                              r'(?m)^    - git_url:\s*"([^"]+)"\s*$',
+                              sources_text
+                          )
+                          if normalize_url(m.group(1)) == norm_url
+                      ]
                       if matches:
-                          last_pos = matches[-1].start()
-                          # Advance to end of this entry block (next list item at same indent)
-                          nxt = re.search(r'\n    - ', sources_text[last_pos:])
-                          insert_rel = last_pos + nxt.start() if nxt else len(sources_text)
-                          insert_at = after_sources + insert_rel
+                          # Existing entries found — insert each new block in descending
+                          # version order without repeating the comment header.
+                          for new_block in grp["blocks"]:
+                              # Re-compute bounds and matches after each insertion
+                              after_sources, sources_end = sources_bounds(fixed)
+                              sources_text = fixed[after_sources:sources_end]
+                              cur_matches = [
+                                  m for m in re.finditer(
+                                      r'(?m)^    - git_url:\s*"([^"]+)"\s*$',
+                                      sources_text
+                                  )
+                                  if normalize_url(m.group(1)) == norm_url
+                              ]
+                              ver_match = re.search(r'project_version:\s*"([^"]+)"', new_block)
+                              new_ver = version_key(ver_match.group(1) if ver_match else "")
+                              # Find first existing entry with a lower version
+                              insert_before = None
+                              for m in cur_matches:
+                                  nxt_m = re.search(r'\n    - ', sources_text[m.end():])
+                                  block_end = m.end() + nxt_m.start() if nxt_m else len(sources_text)
+                                  ver_m = (re.search(r'project_version:\s*"([^"]+)"',
+                                                     sources_text[m.start():block_end]) or
+                                           re.search(r'(?:tag|branch):\s*"([^"]*)"',
+                                                     sources_text[m.start():block_end]))
+                                  if new_ver > version_key(ver_m.group(1) if ver_m else ""):
+                                      insert_before = m.start()
+                                      break
+                              if insert_before is not None:
+                                  # Strip leading \n from new_block — the existing blank line
+                                  # before the entry already provides the separator.
+                                  fixed = (fixed[:after_sources + insert_before]
+                                           + new_block.lstrip("\n") + "\n\n"
+                                           + fixed[after_sources + insert_before:])
+                              else:
+                                  # New version is lowest — append after last matching entry
+                                  last = cur_matches[-1]
+                                  nxt = re.search(r'\n    - ', sources_text[last.end():])
+                                  if nxt:
+                                      ins = after_sources + last.end() + nxt.start()
+                                      fixed = fixed[:ins] + "\n" + new_block + fixed[ins:]
+                                  else:
+                                      fixed = fixed[:sources_end] + "\n" + new_block + "\n" + fixed[sources_end:]
                       else:
-                          # No existing entry for this URL — place at end of sources block
-                          insert_at = sources_end
-                      fixed = fixed[:insert_at] + "\n" + group_text + fixed[insert_at:]
+                          # No existing entry for this URL — add comment + blocks at end of sources
+                          group_text = grp["comment"] + "".join(grp["blocks"])
+                          fixed = fixed[:sources_end] + "\n" + group_text + "\n" + fixed[sources_end:]
 
               with open(CONSUMER_FILE, "w") as f:
                   f.write(fixed)
