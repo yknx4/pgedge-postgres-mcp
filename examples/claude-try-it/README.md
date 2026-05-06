@@ -150,6 +150,10 @@ following path:
 The demo database files and configuration live under
 `~/.pgedge/demo/` when you use the demo option.
 
+Each demo run replaces any previous demo container
+(`pgedge-demo-*`); previous demo data in those containers
+is removed.
+
 ## Production Deployment
 
 These scripts are for quick evaluation and demos only. For

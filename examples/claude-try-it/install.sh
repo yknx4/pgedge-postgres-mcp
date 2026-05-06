@@ -431,10 +431,21 @@ setup_demo_database() {
 
 # ─── Find a free port ────────────────────────────────────────────────────────
 
+port_in_use() {
+  local p="$1"
+  if command -v lsof &>/dev/null; then
+    lsof -i ":$p" >/dev/null 2>&1
+  elif command -v ss &>/dev/null; then
+    ss -tlnH "sport = :$p" 2>/dev/null | grep -q .
+  else
+    (echo >/dev/tcp/localhost/"$p") 2>/dev/null
+  fi
+}
+
 find_free_port() {
   # Try preferred ports in order: 5432, 5433, 5434, 5435, 5436
   for port in 5432 5433 5434 5435 5436; do
-    if ! lsof -i ":$port" >/dev/null 2>&1; then
+    if ! port_in_use "$port"; then
       echo "$port"
       return
     fi

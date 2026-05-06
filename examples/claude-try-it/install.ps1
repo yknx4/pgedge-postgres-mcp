@@ -794,7 +794,7 @@ function Connect-ExistingAuto {
             if ($script:DbName) {
                 $dbs = @(Get-UserDatabases -Port $inst.Port `
                     -User $script:AuthUser -Password "")
-                if ($dbs -contains $script:DbName) {
+                if ($dbs -ccontains $script:DbName) {
                     $script:DbHost = "localhost"
                     $script:DbPort = "$($inst.Port)"
                     $script:DbUser = $script:AuthUser
