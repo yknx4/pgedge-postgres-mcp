@@ -7,7 +7,7 @@ the Postgres MCP Server project.
 
 The Postgres MCP Server consists of:
 
-- **/cmd/**: Entry points (MCP server, CLI, KB builder)
+- **/cmd/**: Entry points (MCP server, CLI)
 - **/internal/**: Core packages (mcp, auth, database, tools, resources)
 - **/web/**: React-based web application (not yet implemented)
 
