@@ -21,7 +21,6 @@ import (
 
 	_ "modernc.org/sqlite"
 	"pgedge-postgres-mcp/internal/config"
-	"pgedge-postgres-mcp/internal/embedding"
 	"pgedge-postgres-mcp/internal/mcp"
 )
 
@@ -256,7 +255,7 @@ func generateKBQueryEmbedding(serverCfg *config.Config, queryText string) ([]flo
 		return nil, "", fmt.Errorf("knowledgebase embedding provider not configured")
 	}
 
-	embCfg := embedding.Config{
+	client, _, err := newEmbedClient(embedClientConfig{
 		Provider:      kbCfg.EmbeddingProvider,
 		Model:         kbCfg.EmbeddingModel,
 		VoyageAPIKey:  kbCfg.EmbeddingVoyageAPIKey,
@@ -264,15 +263,13 @@ func generateKBQueryEmbedding(serverCfg *config.Config, queryText string) ([]flo
 		OpenAIAPIKey:  kbCfg.EmbeddingOpenAIAPIKey,
 		OpenAIBaseURL: kbCfg.EmbeddingOpenAIBaseURL,
 		OllamaURL:     kbCfg.EmbeddingOllamaURL,
-	}
-
-	provider, err := embedding.NewProvider(embCfg)
+	})
 	if err != nil {
 		return nil, "", err
 	}
 
 	ctx := context.Background()
-	vector, err := provider.Embed(ctx, queryText)
+	vector, err := client.Embed(ctx, queryText)
 	if err != nil {
 		return nil, "", err
 	}
@@ -287,7 +284,7 @@ func generateKBQueryEmbedding(serverCfg *config.Config, queryText string) ([]flo
 		vector32[i] = float32(v)
 	}
 
-	return vector32, embCfg.Provider, nil
+	return vector32, kbCfg.EmbeddingProvider, nil
 }
 
 func searchKB(kbPath string, queryEmbedding []float32, projectNames, projectVersions []string, topN int, provider string) ([]KBSearchResult, error) {

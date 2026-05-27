@@ -17,7 +17,6 @@ import (
 	"strings"
 
 	"pgedge-postgres-mcp/internal/config"
-	"pgedge-postgres-mcp/internal/embedding"
 	"pgedge-postgres-mcp/internal/mcp"
 )
 
@@ -55,8 +54,8 @@ func GenerateEmbeddingTool(cfg *config.Config) Tool {
 				return mcp.NewToolError("'text' parameter cannot be empty or whitespace-only")
 			}
 
-			// Create embedding provider from config
-			embCfg := embedding.Config{
+			// Create embedding client from config
+			client, resolvedModel, err := newEmbedClient(embedClientConfig{
 				Provider:      cfg.Embedding.Provider,
 				Model:         cfg.Embedding.Model,
 				VoyageAPIKey:  cfg.Embedding.VoyageAPIKey,
@@ -64,16 +63,14 @@ func GenerateEmbeddingTool(cfg *config.Config) Tool {
 				OpenAIAPIKey:  cfg.Embedding.OpenAIAPIKey,
 				OpenAIBaseURL: cfg.Embedding.OpenAIBaseURL,
 				OllamaURL:     cfg.Embedding.OllamaURL,
-			}
-
-			provider, err := embedding.NewProvider(embCfg)
+			})
 			if err != nil {
 				return mcp.NewToolError(fmt.Sprintf("Failed to initialize embedding provider: %v", err))
 			}
 
 			// Generate embedding
 			ctx := context.Background()
-			vector, err := provider.Embed(ctx, text)
+			vector, err := client.Embed(ctx, text)
 			if err != nil {
 				return mcp.NewToolError(fmt.Sprintf("Failed to generate embedding: %v", err))
 			}
@@ -92,9 +89,9 @@ func GenerateEmbeddingTool(cfg *config.Config) Tool {
 			sb.WriteString("Embedding Generated Successfully\n")
 			sb.WriteString(strings.Repeat("=", 50))
 			sb.WriteString("\n\n")
-			fmt.Fprintf(&sb, "Provider: %s\n", provider.ProviderName())
-			fmt.Fprintf(&sb, "Model: %s\n", provider.ModelName())
-			fmt.Fprintf(&sb, "Dimensions: %d\n", provider.Dimensions())
+			fmt.Fprintf(&sb, "Provider: %s\n", cfg.Embedding.Provider)
+			fmt.Fprintf(&sb, "Model: %s\n", resolvedModel)
+			fmt.Fprintf(&sb, "Dimensions: %d\n", len(vector))
 			fmt.Fprintf(&sb, "Text Length: %d characters\n", len(text))
 			fmt.Fprintf(&sb, "\nText:\n%s\n\n", text)
 			fmt.Fprintf(&sb, "Embedding Vector (%d dimensions):\n%s", len(vector), string(vectorJSON))

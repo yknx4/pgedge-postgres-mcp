@@ -17,7 +17,6 @@ import (
 
 	"pgedge-postgres-mcp/internal/config"
 	"pgedge-postgres-mcp/internal/database"
-	"pgedge-postgres-mcp/internal/embedding"
 	"pgedge-postgres-mcp/internal/logging"
 	"pgedge-postgres-mcp/internal/mcp"
 	"pgedge-postgres-mcp/internal/search"
@@ -617,7 +616,7 @@ func generateQueryEmbeddingWithConfig(serverCfg *config.Config, queryText string
 		return nil, fmt.Errorf("embedding generation is not enabled in server configuration")
 	}
 
-	embCfg := embedding.Config{
+	client, _, err := newEmbedClient(embedClientConfig{
 		Provider:      serverCfg.Embedding.Provider,
 		Model:         serverCfg.Embedding.Model,
 		VoyageAPIKey:  serverCfg.Embedding.VoyageAPIKey,
@@ -625,15 +624,13 @@ func generateQueryEmbeddingWithConfig(serverCfg *config.Config, queryText string
 		OpenAIAPIKey:  serverCfg.Embedding.OpenAIAPIKey,
 		OpenAIBaseURL: serverCfg.Embedding.OpenAIBaseURL,
 		OllamaURL:     serverCfg.Embedding.OllamaURL,
-	}
-
-	provider, err := embedding.NewProvider(embCfg)
+	})
 	if err != nil {
 		return nil, err
 	}
 
 	ctx := context.Background()
-	vector, err := provider.Embed(ctx, queryText)
+	vector, err := client.Embed(ctx, queryText)
 	if err != nil {
 		return nil, err
 	}

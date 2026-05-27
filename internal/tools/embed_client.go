@@ -1,0 +1,90 @@
+/*-------------------------------------------------------------------------
+ *
+ * pgEdge Natural Language Agent
+ *
+ * Copyright (c) 2025 - 2026, pgEdge, Inc.
+ * This software is released under The PostgreSQL License
+ *
+ *-------------------------------------------------------------------------
+ */
+
+package tools
+
+import (
+	"fmt"
+
+	"github.com/pgEdge/pgedge-go-llm-lib/llm"
+	_ "github.com/pgEdge/pgedge-go-llm-lib/llm/provider/ollama"
+	_ "github.com/pgEdge/pgedge-go-llm-lib/llm/provider/openai"
+	_ "github.com/pgEdge/pgedge-go-llm-lib/llm/provider/voyage"
+)
+
+// embedClientConfig collects the per-provider config fields the tools
+// need to construct an llm.Client for embeddings.
+type embedClientConfig struct {
+	Provider      string
+	Model         string
+	VoyageAPIKey  string
+	VoyageBaseURL string
+	OpenAIAPIKey  string
+	OpenAIBaseURL string
+	OllamaURL     string
+}
+
+// newEmbedClient builds an llm.Client for the configured embedding
+// provider, applying the same defaults the previous embedding.Provider
+// wrapper applied (voyage-3-lite model default, nomic-embed-text for
+// ollama, localhost:11434 for the ollama URL). It returns the client
+// and the resolved model name (after defaults are applied) so callers
+// can display it without re-deriving the default logic.
+func newEmbedClient(cfg embedClientConfig) (llm.Client, string, error) {
+	var opts llm.Options
+	switch cfg.Provider {
+	case "voyage":
+		if cfg.VoyageAPIKey == "" {
+			return nil, "", fmt.Errorf("Voyage AI API key is required when provider is 'voyage'")
+		}
+		model := cfg.Model
+		if model == "" {
+			model = "voyage-3-lite"
+		}
+		opts = llm.Options{
+			APIKey:  cfg.VoyageAPIKey,
+			Model:   model,
+			BaseURL: cfg.VoyageBaseURL,
+		}
+	case "openai":
+		if cfg.OpenAIAPIKey == "" {
+			return nil, "", fmt.Errorf("OpenAI API key is required when provider is 'openai'")
+		}
+		opts = llm.Options{
+			APIKey:  cfg.OpenAIAPIKey,
+			Model:   cfg.Model,
+			BaseURL: cfg.OpenAIBaseURL,
+		}
+	case "ollama":
+		baseURL := cfg.OllamaURL
+		if baseURL == "" {
+			baseURL = "http://localhost:11434"
+		}
+		model := cfg.Model
+		if model == "" {
+			model = "nomic-embed-text"
+		}
+		opts = llm.Options{
+			Model:   model,
+			BaseURL: baseURL,
+		}
+	default:
+		return nil, "", fmt.Errorf(
+			"unsupported embedding provider: %s (supported: voyage, openai, ollama)",
+			cfg.Provider,
+		)
+	}
+
+	client, err := llm.NewClient(cfg.Provider, opts)
+	if err != nil {
+		return nil, "", fmt.Errorf("create %s embedding client: %w", cfg.Provider, err)
+	}
+	return client, opts.Model, nil
+}
