@@ -42,7 +42,7 @@ func newEmbedClient(cfg embedClientConfig) (llm.Client, string, error) {
 	switch cfg.Provider {
 	case "voyage":
 		if cfg.VoyageAPIKey == "" {
-			return nil, "", fmt.Errorf("Voyage AI API key is required when provider is 'voyage'")
+			return nil, "", fmt.Errorf("missing Voyage AI API key for embedding provider 'voyage'")
 		}
 		model := cfg.Model
 		if model == "" {
@@ -55,7 +55,7 @@ func newEmbedClient(cfg embedClientConfig) (llm.Client, string, error) {
 		}
 	case "openai":
 		if cfg.OpenAIAPIKey == "" {
-			return nil, "", fmt.Errorf("OpenAI API key is required when provider is 'openai'")
+			return nil, "", fmt.Errorf("missing OpenAI API key for embedding provider 'openai'")
 		}
 		opts = llm.Options{
 			APIKey:  cfg.OpenAIAPIKey,

@@ -26,6 +26,7 @@ and this project adheres to
 - OpenAI models that require the Responses API (`gpt-5-*`, `o1-*`,
   `o3-*`) are now supported transparently; the library routes them
   to `/v1/responses` automatically based on the model name.
+
 - Embedding provider clients (Voyage, OpenAI, Ollama) now use the
   shared
   [`pgedge-go-llm-lib`](https://github.com/pgEdge/pgedge-go-llm-lib)
