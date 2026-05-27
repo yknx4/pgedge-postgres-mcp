@@ -11,6 +11,51 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useLocalStorageString } from './useLocalStorage';
 
+// Display labels for known providers. The library proxy now reports
+// only the canonical provider name; the UI needs a human-friendly
+// label for the dropdown.
+const PROVIDER_DISPLAY_LABELS = {
+    anthropic: 'Anthropic Claude',
+    openai: 'OpenAI',
+    ollama: 'Ollama',
+    gemini: 'Gemini',
+};
+
+const providerDisplayLabel = (name) => {
+    if (!name) return '';
+    if (PROVIDER_DISPLAY_LABELS[name]) return PROVIDER_DISPLAY_LABELS[name];
+    // Fallback: capitalise the first letter.
+    return name.charAt(0).toUpperCase() + name.slice(1);
+};
+
+// Normalise the provider list returned by the proxy. The wire format
+// is `{name, model, default}`; the UI expects a `display` field and
+// retains the old `isDefault` alias for compatibility with any
+// consumers that still reference it.
+const normaliseProviders = (rawProviders) => {
+    if (!Array.isArray(rawProviders)) return [];
+    return rawProviders.map((p) => ({
+        name: p.name,
+        display: providerDisplayLabel(p.name),
+        model: p.model || '',
+        isDefault: Boolean(p.default),
+    }));
+};
+
+// Normalise the models list returned by the proxy. The wire format is
+// `["model-id", ...]`; the UI expects objects with a `name` field
+// (and an optional `description`, which the new API no longer
+// provides).
+const normaliseModels = (rawModels) => {
+    if (!Array.isArray(rawModels)) return [];
+    return rawModels.map((m) => {
+        if (typeof m === 'string') {
+            return { name: m, description: '' };
+        }
+        return { name: m.name || '', description: m.description || '' };
+    });
+};
+
 // Helper functions for per-provider model storage
 const getProviderModelKey = (provider) => `llm-model-${provider}`;
 
@@ -125,8 +170,8 @@ export const useLLMProviders = (sessionToken) => {
             setError('');
 
             try {
-                console.log('Fetching providers from /api/llm/providers...');
-                const response = await fetch('/api/llm/providers', {
+                console.log('Fetching providers from /api/llm/v1/providers...');
+                const response = await fetch('/api/llm/v1/providers', {
                     credentials: 'include',
                     headers: {
                         'Authorization': `Bearer ${sessionToken}`,
@@ -142,25 +187,44 @@ export const useLLMProviders = (sessionToken) => {
 
                 const data = await response.json();
                 console.log('Providers data:', data);
-                setProviders(data.providers || []);
+
+                // Normalise the proxy wire format ({name, model, default})
+                // into the {name, display, model, isDefault} shape the UI
+                // consumes.
+                const normalisedProviders = normaliseProviders(data.providers);
+                setProviders(normalisedProviders);
 
                 // Only set default if no saved provider or saved provider is not available
-                const savedProviderExists = data.providers?.some(p => p.name === selectedProvider);
+                const savedProviderExists = normalisedProviders.some(p => p.name === selectedProvider);
 
                 if (!selectedProvider || !savedProviderExists) {
-                    // No saved preference or saved provider no longer available - use default
-                    const defaultProvider = data.providers?.find(p => p.isDefault);
+                    // No saved preference or saved provider no longer available - use default.
+                    // The proxy returns the default provider name in
+                    // `default_provider`; if that's missing fall back to
+                    // the entry flagged `default`, then to the first one.
+                    const defaultProviderName = data.default_provider || '';
+                    let defaultProvider = null;
+                    if (defaultProviderName) {
+                        defaultProvider = normalisedProviders.find(p => p.name === defaultProviderName);
+                    }
+                    if (!defaultProvider) {
+                        defaultProvider = normalisedProviders.find(p => p.isDefault) || normalisedProviders[0];
+                    }
                     if (defaultProvider) {
                         console.log('Setting default provider:', defaultProvider.name);
                         setSelectedProvider(defaultProvider.name);
-                        // Load remembered model for this provider (or default)
+                        // Load remembered model for this provider, falling
+                        // back to the provider's advertised default model
+                        // (returned by the proxy on each provider entry).
                         const rememberedModel = getPerProviderModel(defaultProvider.name);
                         if (rememberedModel) {
                             console.log('Using remembered model for provider:', rememberedModel);
                             setSelectedModel(rememberedModel);
+                        } else if (defaultProvider.model) {
+                            console.log('Using provider default model:', defaultProvider.model);
+                            setSelectedModel(defaultProvider.model);
                         } else {
-                            console.log('Using default model:', data.defaultModel);
-                            setSelectedModel(data.defaultModel || '');
+                            setSelectedModel('');
                         }
                     } else {
                         console.warn('No default provider found in response');
@@ -197,7 +261,7 @@ export const useLLMProviders = (sessionToken) => {
 
             try {
                 console.log('Fetching models for provider:', selectedProvider);
-                const response = await fetch(`/api/llm/models?provider=${selectedProvider}`, {
+                const response = await fetch(`/api/llm/v1/models?provider=${encodeURIComponent(selectedProvider)}`, {
                     credentials: 'include',
                     headers: {
                         'Authorization': `Bearer ${sessionToken}`,
@@ -213,17 +277,22 @@ export const useLLMProviders = (sessionToken) => {
 
                 const data = await response.json();
                 console.log('Models data:', data);
-                setModels(data.models || []);
+
+                // The proxy returns models as plain strings; normalise
+                // to the {name, description} shape the UI consumes
+                // (description is no longer provided by the API).
+                const normalisedModels = normaliseModels(data.models);
+                setModels(normalisedModels);
 
                 // Load remembered model for this provider or select first available
-                if (data.models && data.models.length > 0) {
+                if (normalisedModels.length > 0) {
                     // Check if there's a pending model restore (from loading a conversation)
                     const pendingModel = pendingModelRestoreRef.current;
                     pendingModelRestoreRef.current = null; // Clear it after reading
 
                     if (pendingModel) {
                         // Check if pending model is available for this provider (exact match)
-                        const pendingModelExists = data.models.some(m => m.name === pendingModel);
+                        const pendingModelExists = normalisedModels.some(m => m.name === pendingModel);
                         if (pendingModelExists) {
                             console.log('Restoring model from conversation:', pendingModel);
                             usingFallbackModelRef.current = false;
@@ -233,7 +302,7 @@ export const useLLMProviders = (sessionToken) => {
                         }
 
                         // Try family match for conversation model (e.g., claude-opus-4-5-20251101 → claude-opus-4-5-20251217)
-                        const pendingFamilyMatch = findModelFamilyMatch(pendingModel, data.models);
+                        const pendingFamilyMatch = findModelFamilyMatch(pendingModel, normalisedModels);
                         if (pendingFamilyMatch) {
                             console.log('Restoring model from conversation via family match:', pendingModel, '→', pendingFamilyMatch);
                             usingFallbackModelRef.current = false;
@@ -250,7 +319,7 @@ export const useLLMProviders = (sessionToken) => {
 
                     if (rememberedModel) {
                         // Check if remembered model is still available (exact match)
-                        const rememberedModelExists = data.models.some(m => m.name === rememberedModel);
+                        const rememberedModelExists = normalisedModels.some(m => m.name === rememberedModel);
                         if (rememberedModelExists) {
                             console.log('Using remembered model for provider:', rememberedModel);
                             usingFallbackModelRef.current = false;
@@ -258,7 +327,7 @@ export const useLLMProviders = (sessionToken) => {
                             // No need to save - it's already saved
                         } else {
                             // Try family match (e.g., claude-opus-4-5-20251101 → claude-opus-4-5-20251217)
-                            const familyMatch = findModelFamilyMatch(rememberedModel, data.models);
+                            const familyMatch = findModelFamilyMatch(rememberedModel, normalisedModels);
                             if (familyMatch) {
                                 console.log('Model updated via family match:', rememberedModel, '→', familyMatch);
                                 usingFallbackModelRef.current = false;
@@ -268,19 +337,19 @@ export const useLLMProviders = (sessionToken) => {
                             } else {
                                 // No exact or family match - fall back to first model
                                 // but DON'T save - preserve user's original preference
-                                console.log('Remembered model not available (no family match), using first model:', data.models[0].name);
+                                console.log('Remembered model not available (no family match), using first model:', normalisedModels[0].name);
                                 console.log('(Not saving fallback to preserve user preference:', rememberedModel, ')');
                                 usingFallbackModelRef.current = true;
-                                setSelectedModel(data.models[0].name);
+                                setSelectedModel(normalisedModels[0].name);
                             }
                         }
                     } else {
                         // No remembered model - use first model and save it
-                        console.log('No remembered model for this provider, selecting first model:', data.models[0].name);
+                        console.log('No remembered model for this provider, selecting first model:', normalisedModels[0].name);
                         usingFallbackModelRef.current = false;
-                        setSelectedModel(data.models[0].name);
+                        setSelectedModel(normalisedModels[0].name);
                         // Save the selection (first time using this provider)
-                        setPerProviderModel(selectedProvider, data.models[0].name);
+                        setPerProviderModel(selectedProvider, normalisedModels[0].name);
                     }
                 } else {
                     console.warn('No models returned from API');

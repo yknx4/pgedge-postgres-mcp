@@ -32,6 +32,89 @@ const TOKEN_COMPACTION_THRESHOLD = 15000;
 const RATE_LIMIT_RETRY_DELAY_MS = 60000; // 60 seconds
 
 /**
+ * Wraps a plain string into a typed content-block array for the
+ * proxy wire format ({type: "text", text: "..."}). Accepts strings
+ * that are already content-block arrays (returns them as-is) so the
+ * helper is idempotent for messages already in block form.
+ * @param {string|Array} content - Message content to wrap.
+ * @returns {Array} - Array of content blocks.
+ */
+const toTextBlocks = (content) => {
+    if (Array.isArray(content)) return content;
+    return [{ type: 'text', text: typeof content === 'string' ? content : String(content || '') }];
+};
+
+/**
+ * Converts an MCP tool result (string or array of {type, text}
+ * blocks) into a flat text string for the proxy's tool_result block.
+ * The library now expects a single `text` field on tool_result, not
+ * a nested content array.
+ * @param {*} result - MCP tool result content.
+ * @returns {string} - Flattened text payload.
+ */
+const flattenToolResultText = (result) => {
+    if (result == null) return '';
+    if (typeof result === 'string') return result;
+    if (Array.isArray(result)) {
+        return result
+            .map((item) => {
+                if (typeof item === 'string') return item;
+                if (item && typeof item === 'object') {
+                    if (typeof item.text === 'string') return item.text;
+                    return JSON.stringify(item);
+                }
+                return '';
+            })
+            .join('');
+    }
+    if (typeof result === 'object') {
+        if (typeof result.text === 'string') return result.text;
+        return JSON.stringify(result);
+    }
+    return String(result);
+};
+
+/**
+ * Translates MCP tool descriptors (which use camelCase
+ * `inputSchema`) into the snake_case `input_schema` field the
+ * library proxy expects.
+ * @param {Array} tools - MCP-style tool descriptors.
+ * @returns {Array} - Tool descriptors using `input_schema`.
+ */
+const toProxyTools = (tools) => {
+    if (!Array.isArray(tools)) return [];
+    return tools.map((t) => {
+        if (!t) return t;
+        const { inputSchema, input_schema, ...rest } = t;
+        return {
+            ...rest,
+            input_schema: input_schema || inputSchema || {},
+        };
+    });
+};
+
+/**
+ * Builds the proxy-format tool_result message: role "tool" with a
+ * single tool_result content block carrying tool_use_id, text, and
+ * optional is_error.
+ * @param {string} toolUseId - The tool_use id this result responds to.
+ * @param {*} content - MCP result content.
+ * @param {boolean} isError - Whether the result represents an error.
+ * @returns {object} - Message envelope ready to send to the proxy.
+ */
+const buildToolResultMessage = (toolUseId, content, isError) => {
+    const block = {
+        type: 'tool_result',
+        tool_use_id: toolUseId,
+        text: flattenToolResultText(content),
+    };
+    if (isError) {
+        block.is_error = true;
+    }
+    return { role: 'tool', content: [block] };
+};
+
+/**
  * Checks if an error is a rate limit error.
  * @param {number} status - HTTP status code
  * @param {string} errorText - Error message text
@@ -195,21 +278,33 @@ const estimateTotalTokens = (messages) => {
         if (typeof msg.content === 'string') {
             total += estimateTokensForText(msg.content);
         } else if (Array.isArray(msg.content)) {
-            // Handle tool_use and tool_result arrays
+            // Handle text, tool_use and tool_result blocks.
             for (const item of msg.content) {
-                if (item.text) {
-                    total += estimateTokensForText(item.text);
-                } else if (item.input) {
-                    total += estimateTokensForText(JSON.stringify(item.input));
-                } else if (item.content) {
-                    // Tool results can have content as string or array
-                    if (typeof item.content === 'string') {
+                if (!item) continue;
+                if (item.type === 'tool_use' && item.tool_use) {
+                    // New format: tool_use details nest under tool_use.
+                    if (item.tool_use.input !== undefined) {
+                        total += estimateTokensForText(JSON.stringify(item.tool_use.input));
+                    }
+                } else if (item.type === 'tool_result') {
+                    // New format: tool_result uses the `text` field; the
+                    // old format kept the payload under `content`.
+                    if (typeof item.text === 'string') {
+                        total += estimateTokensForText(item.text);
+                    } else if (typeof item.content === 'string') {
                         total += estimateTokensForText(item.content);
                     } else if (Array.isArray(item.content)) {
                         for (const c of item.content) {
-                            if (c.text) total += estimateTokensForText(c.text);
+                            if (c && typeof c.text === 'string') {
+                                total += estimateTokensForText(c.text);
+                            }
                         }
                     }
+                } else if (typeof item.text === 'string') {
+                    total += estimateTokensForText(item.text);
+                } else if (item.input !== undefined) {
+                    // Defensive: legacy flat tool_use shape.
+                    total += estimateTokensForText(JSON.stringify(item.input));
                 }
             }
         }
@@ -612,7 +707,10 @@ const ChatInterface = ({ conversations }) => {
         abortControllerRef.current = abortController;
 
         try {
-            // Build conversation history
+            // Build conversation history. The proxy wire format expects
+            // each message's content as an array of typed content
+            // blocks ([{type:"text", text:"..."}]); the UI keeps content
+            // as plain strings, so wrap them here on the way out.
             const conversationMessages = [];
 
             // Add all previous messages
@@ -620,12 +718,12 @@ const ChatInterface = ({ conversations }) => {
                 if (msg.role === 'user') {
                     conversationMessages.push({
                         role: 'user',
-                        content: msg.content
+                        content: toTextBlocks(msg.content),
                     });
                 } else if (msg.role === 'assistant' && msg.content) {
                     conversationMessages.push({
                         role: 'assistant',
-                        content: msg.content
+                        content: toTextBlocks(msg.content),
                     });
                 }
             }
@@ -633,7 +731,7 @@ const ChatInterface = ({ conversations }) => {
             // Add current user message
             conversationMessages.push({
                 role: 'user',
-                content: userMessage.content
+                content: toTextBlocks(userMessage.content),
             });
 
             const activity = [];
@@ -671,9 +769,10 @@ const ChatInterface = ({ conversations }) => {
                     });
                 }
 
-                // Call LLM with compacted history
-                // Note: Always send debug=true to get token usage for rate limit tracking
-                const llmResponse = await fetch('/api/llm/chat', {
+                // Call LLM with compacted history. The proxy now lives
+                // under /api/llm/v1/* and always returns token usage in
+                // the response body (no `debug` flag is needed).
+                const llmResponse = await fetch('/api/llm/v1/chat', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -683,10 +782,9 @@ const ChatInterface = ({ conversations }) => {
                     signal: abortController.signal,
                     body: JSON.stringify({
                         messages: compactedMessages,
-                        tools: tools,
+                        tools: toProxyTools(tools),
                         provider: llmProviders.selectedProvider,
                         model: llmProviders.selectedModel,
-                        debug: true,
                     }),
                 });
 
@@ -778,10 +876,12 @@ const ChatInterface = ({ conversations }) => {
 
                 const llmData = await llmResponse.json();
 
-                // Track token usage for rate limit awareness
-                console.log('[Token Debug] llmData.token_usage:', llmData.token_usage);
-                console.log('[Token Debug] llmData.usage:', llmData.usage);
-                tokenUsageTracker.record(llmData.token_usage || llmData.usage);
+                // Track token usage for rate limit awareness. The proxy
+                // now returns usage under the `usage` key (was
+                // `token_usage`); fall back for safety.
+                const usage = llmData.usage || llmData.token_usage;
+                console.log('[Token Debug] llmData.usage:', usage);
+                tokenUsageTracker.record(usage);
 
                 // Reset rate limit retry counter after successful response
                 rateLimitRetryCount = 0;
@@ -824,7 +924,7 @@ const ChatInterface = ({ conversations }) => {
                             provider: llmProviders.selectedProvider,
                             model: llmProviders.selectedModel,
                             activity: activity,
-                            tokenUsage: llmData.token_usage,
+                            tokenUsage: usage,
                         }];
                     });
                     break;
@@ -838,22 +938,28 @@ const ChatInterface = ({ conversations }) => {
                         throw new Error('LLM indicated tool_use but no tool_use blocks found');
                     }
 
-                    // Execute tools
-                    const toolResults = [];
-                    for (const toolUse of toolUses) {
-                        console.log('Executing tool:', toolUse.name, 'with args:', toolUse.input);
+                    // Execute tools. The new wire format nests the call
+                    // details under a `tool_use` object; pull them out
+                    // once per block.
+                    const toolResultMessages = [];
+                    for (const toolUseBlock of toolUses) {
+                        const toolUse = toolUseBlock.tool_use || toolUseBlock;
+                        const toolUseId = toolUse.id;
+                        const toolName = toolUse.name;
+                        const toolInput = toolUse.input || {};
+                        console.log('Executing tool:', toolName, 'with args:', toolInput);
 
                         // Add initial activity entry (token count will be updated after execution)
                         const activityIndex = activity.length;
                         const activityEntry = {
                             type: 'tool',
-                            name: toolUse.name,
+                            name: toolName,
                             timestamp: new Date().toISOString(),
                             tokens: null, // Will be updated after execution
                         };
                         // For read_resource, capture the URI being accessed
-                        if (toolUse.name === 'read_resource' && toolUse.input?.uri) {
-                            activityEntry.uri = toolUse.input.uri;
+                        if (toolName === 'read_resource' && toolInput?.uri) {
+                            activityEntry.uri = toolInput.uri;
                         }
                         activity.push(activityEntry);
 
@@ -871,18 +977,17 @@ const ChatInterface = ({ conversations }) => {
                         });
 
                         // Check if this is a write query needing confirmation
-                        if (toolUse.name === 'query_database' && toolUse.input?.query) {
-                            if (isWriteAccessEnabled() && isWriteQuery(toolUse.input.query)) {
-                                const confirmed = await requestWriteConfirmation(toolUse.input.query);
+                        if (toolName === 'query_database' && toolInput?.query) {
+                            if (isWriteAccessEnabled() && isWriteQuery(toolInput.query)) {
+                                const confirmed = await requestWriteConfirmation(toolInput.query);
                                 if (!confirmed) {
                                     activity[activityIndex].isError = true;
                                     activity[activityIndex].tokens = 0;
-                                    toolResults.push({
-                                        type: 'tool_result',
-                                        tool_use_id: toolUse.id,
-                                        content: 'Query execution was declined by the user. Do not retry this query. Ask the user how they would like to proceed.',
-                                        is_error: true,
-                                    });
+                                    toolResultMessages.push(buildToolResultMessage(
+                                        toolUseId,
+                                        'Query execution was declined by the user. Do not retry this query. Ask the user how they would like to proceed.',
+                                        true,
+                                    ));
                                     continue;
                                 }
                             }
@@ -890,7 +995,7 @@ const ChatInterface = ({ conversations }) => {
 
                         try {
                             // Execute tool via MCP
-                            const result = await mcpClient.callTool(toolUse.name, toolUse.input);
+                            const result = await mcpClient.callTool(toolName, toolInput);
                             console.log('Tool result:', result);
 
                             // Estimate tokens in the result
@@ -910,23 +1015,19 @@ const ChatInterface = ({ conversations }) => {
                                 return newMessages;
                             });
 
-                            const toolResult = {
-                                type: 'tool_result',
-                                tool_use_id: toolUse.id,
-                                content: result.content,
-                            };
-                            if (result.isError) {
-                                toolResult.is_error = true;
-                            }
-                            toolResults.push(toolResult);
+                            toolResultMessages.push(buildToolResultMessage(
+                                toolUseId,
+                                result.content,
+                                Boolean(result.isError),
+                            ));
 
                             // Refresh tools if manage_connections was called
-                            if (toolUse.name === 'manage_connections' && !result.isError) {
+                            if (toolName === 'manage_connections' && !result.isError) {
                                 await refreshTools();
                             }
 
                             // Refresh database state if LLM switched databases
-                            if (toolUse.name === 'select_database_connection' && !result.isError) {
+                            if (toolName === 'select_database_connection' && !result.isError) {
                                 await fetchDatabases();
                             }
                         } catch (toolError) {
@@ -935,26 +1036,27 @@ const ChatInterface = ({ conversations }) => {
                             activity[activityIndex].tokens = estimateToolResultTokens(errorContent);
                             activity[activityIndex].isError = true;
 
-                            toolResults.push({
-                                type: 'tool_result',
-                                tool_use_id: toolUse.id,
-                                content: errorContent,
-                                is_error: true,
-                            });
+                            toolResultMessages.push(buildToolResultMessage(
+                                toolUseId,
+                                errorContent,
+                                true,
+                            ));
                         }
                     }
 
-                    // Add assistant message with tool uses
+                    // Echo the assistant turn (text + tool_use blocks) back
+                    // into the conversation history so the next request
+                    // includes it.
                     conversationMessages.push({
                         role: 'assistant',
                         content: llmData.content,
                     });
 
-                    // Add user message with tool results
-                    conversationMessages.push({
-                        role: 'user',
-                        content: toolResults,
-                    });
+                    // Each tool result is its own role-"tool" message in
+                    // the new wire format.
+                    for (const toolResultMsg of toolResultMessages) {
+                        conversationMessages.push(toolResultMsg);
+                    }
 
                     // Continue loop
                     continue;
@@ -1101,18 +1203,19 @@ const ChatInterface = ({ conversations }) => {
             };
             setMessages(prev => [...prev, systemMessage]);
 
-            // Build conversation history (exclude system messages)
+            // Build conversation history (exclude system messages). The
+            // proxy expects each content as an array of typed blocks.
             const conversationMessages = [];
             for (const msg of messages) {
                 if (msg.role === 'user') {
                     conversationMessages.push({
                         role: 'user',
-                        content: msg.content
+                        content: toTextBlocks(msg.content),
                     });
                 } else if (msg.role === 'assistant' && msg.content) {
                     conversationMessages.push({
                         role: 'assistant',
-                        content: msg.content
+                        content: toTextBlocks(msg.content),
                     });
                 }
             }
@@ -1120,10 +1223,10 @@ const ChatInterface = ({ conversations }) => {
             if (promptResult.messages) {
                 for (const msg of promptResult.messages) {
                     if (msg.role === 'user') {
-                        // Add to conversation history (only role and content)
+                        // MCP returns the prompt body under msg.content.text.
                         conversationMessages.push({
                             role: 'user',
-                            content: msg.content.text
+                            content: toTextBlocks(msg.content?.text || ''),
                         });
                     }
                 }
@@ -1179,9 +1282,9 @@ const ChatInterface = ({ conversations }) => {
                     });
                 }
 
-                // Make LLM request with compacted history
-                // Note: Always send debug=true to get token usage for rate limit tracking
-                const response = await fetch('/api/llm/chat', {
+                // Make LLM request with compacted history. The proxy
+                // always returns token usage (no `debug` flag is needed).
+                const response = await fetch('/api/llm/v1/chat', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -1189,10 +1292,9 @@ const ChatInterface = ({ conversations }) => {
                     },
                     body: JSON.stringify({
                         messages: compactedMessages,
-                        tools: tools,
+                        tools: toProxyTools(tools),
                         provider: llmProviders.selectedProvider,
                         model: llmProviders.selectedModel,
-                        debug: true,
                     }),
                 });
 
@@ -1264,10 +1366,11 @@ const ChatInterface = ({ conversations }) => {
 
                 const llmData = await response.json();
 
-                // Track token usage for rate limit awareness
-                console.log('[Token Debug] llmData.token_usage:', llmData.token_usage);
-                console.log('[Token Debug] llmData.usage:', llmData.usage);
-                tokenUsageTracker.record(llmData.token_usage || llmData.usage);
+                // Track token usage for rate limit awareness. Proxy now
+                // returns usage under `usage`; fall back for safety.
+                const usage = llmData.usage || llmData.token_usage;
+                console.log('[Token Debug] llmData.usage:', usage);
+                tokenUsageTracker.record(usage);
 
                 // Reset rate limit retry counter after successful response
                 rateLimitRetryCount = 0;
@@ -1292,7 +1395,7 @@ const ChatInterface = ({ conversations }) => {
                             provider: llmProviders.selectedProvider,
                             model: llmProviders.selectedModel,
                             activity: activity,
-                            tokenUsage: llmData.token_usage,
+                            tokenUsage: usage,
                         }];
                     });
                     break;
@@ -1306,20 +1409,26 @@ const ChatInterface = ({ conversations }) => {
                         throw new Error('LLM indicated tool_use but no tool_use blocks found');
                     }
 
-                    // Execute tools
-                    const toolResults = [];
-                    for (const toolUse of toolUses) {
+                    // Execute tools. The new wire format nests the call
+                    // details under a `tool_use` object.
+                    const toolResultMessages = [];
+                    for (const toolUseBlock of toolUses) {
+                        const toolUse = toolUseBlock.tool_use || toolUseBlock;
+                        const toolUseId = toolUse.id;
+                        const toolName = toolUse.name;
+                        const toolInput = toolUse.input || {};
+
                         // Add initial activity entry (token count will be updated after execution)
                         const activityIndex = activity.length;
                         const activityEntry = {
                             type: 'tool',
-                            name: toolUse.name,
+                            name: toolName,
                             timestamp: new Date().toISOString(),
                             tokens: null, // Will be updated after execution
                         };
                         // For read_resource, capture the URI being accessed
-                        if (toolUse.name === 'read_resource' && toolUse.input?.uri) {
-                            activityEntry.uri = toolUse.input.uri;
+                        if (toolName === 'read_resource' && toolInput?.uri) {
+                            activityEntry.uri = toolInput.uri;
                         }
                         activity.push(activityEntry);
 
@@ -1336,18 +1445,17 @@ const ChatInterface = ({ conversations }) => {
                         });
 
                         // Check if this is a write query needing confirmation
-                        if (toolUse.name === 'query_database' && toolUse.input?.query) {
-                            if (isWriteAccessEnabled() && isWriteQuery(toolUse.input.query)) {
-                                const confirmed = await requestWriteConfirmation(toolUse.input.query);
+                        if (toolName === 'query_database' && toolInput?.query) {
+                            if (isWriteAccessEnabled() && isWriteQuery(toolInput.query)) {
+                                const confirmed = await requestWriteConfirmation(toolInput.query);
                                 if (!confirmed) {
                                     activity[activityIndex].isError = true;
                                     activity[activityIndex].tokens = 0;
-                                    toolResults.push({
-                                        type: 'tool_result',
-                                        tool_use_id: toolUse.id,
-                                        content: 'Query execution was declined by the user. Do not retry this query. Ask the user how they would like to proceed.',
-                                        is_error: true,
-                                    });
+                                    toolResultMessages.push(buildToolResultMessage(
+                                        toolUseId,
+                                        'Query execution was declined by the user. Do not retry this query. Ask the user how they would like to proceed.',
+                                        true,
+                                    ));
                                     continue;
                                 }
                             }
@@ -1355,7 +1463,7 @@ const ChatInterface = ({ conversations }) => {
 
                         try {
                             // Execute tool via MCP
-                            const result = await mcpClient.callTool(toolUse.name, toolUse.input);
+                            const result = await mcpClient.callTool(toolName, toolInput);
 
                             // Estimate tokens in the result
                             const resultTokens = estimateToolResultTokens(result.content);
@@ -1374,23 +1482,19 @@ const ChatInterface = ({ conversations }) => {
                                 return newMessages;
                             });
 
-                            const toolResult = {
-                                type: 'tool_result',
-                                tool_use_id: toolUse.id,
-                                content: result.content,
-                            };
-                            if (result.isError) {
-                                toolResult.is_error = true;
-                            }
-                            toolResults.push(toolResult);
+                            toolResultMessages.push(buildToolResultMessage(
+                                toolUseId,
+                                result.content,
+                                Boolean(result.isError),
+                            ));
 
                             // Refresh tools if manage_connections was called
-                            if (toolUse.name === 'manage_connections' && !result.isError) {
+                            if (toolName === 'manage_connections' && !result.isError) {
                                 await refreshTools();
                             }
 
                             // Refresh database state if LLM switched databases
-                            if (toolUse.name === 'select_database_connection' && !result.isError) {
+                            if (toolName === 'select_database_connection' && !result.isError) {
                                 await fetchDatabases();
                             }
                         } catch (toolError) {
@@ -1399,26 +1503,25 @@ const ChatInterface = ({ conversations }) => {
                             activity[activityIndex].tokens = estimateToolResultTokens(errorContent);
                             activity[activityIndex].isError = true;
 
-                            toolResults.push({
-                                type: 'tool_result',
-                                tool_use_id: toolUse.id,
-                                content: errorContent,
-                                is_error: true,
-                            });
+                            toolResultMessages.push(buildToolResultMessage(
+                                toolUseId,
+                                errorContent,
+                                true,
+                            ));
                         }
                     }
 
-                    // Add assistant message with tool uses
+                    // Echo the assistant turn into the conversation
+                    // history for the next iteration.
                     conversationMessages.push({
                         role: 'assistant',
                         content: llmData.content,
                     });
 
-                    // Add user message with tool results
-                    conversationMessages.push({
-                        role: 'user',
-                        content: toolResults,
-                    });
+                    // Each tool result is its own role-"tool" message.
+                    for (const toolResultMsg of toolResultMessages) {
+                        conversationMessages.push(toolResultMsg);
+                    }
 
                     // Continue loop
                     continue;
