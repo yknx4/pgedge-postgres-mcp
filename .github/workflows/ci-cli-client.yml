@@ -2,9 +2,9 @@ name: CI - CLI Client
 
 on:
     push:
-        branches: [ main, develop ]
+        branches: [ main, develop, 'feat/llm-lib-*' ]
     pull_request:
-        branches: [ main, develop ]
+        branches: [ main, develop, 'feat/llm-lib-*' ]
 
 jobs:
     cli-client:
