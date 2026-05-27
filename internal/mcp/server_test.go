@@ -521,9 +521,9 @@ func runStdio(t *testing.T, server *Server, input string) string {
 	})
 }
 
+// TestRunStdio_NotificationsInitialized verifies that a real JSON-RPC
+// notification (no "id" member, per §4.1) produces no response on stdio.
 func TestRunStdio_NotificationsInitialized(t *testing.T) {
-	// A real JSON-RPC notification has NO "id" member (per §4.1). The
-	// stdio server must not write any response.
 	server := NewServer(&mockToolProvider{})
 	input := `{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}` + "\n"
 
@@ -533,11 +533,12 @@ func TestRunStdio_NotificationsInitialized(t *testing.T) {
 	}
 }
 
+// TestRunStdio_UnknownNotification verifies that unknown-method
+// notifications are silently acknowledged. Replying with -32601 to a
+// notification would be doubly wrong per JSON-RPC 2.0 §4.1: the server
+// must not reply at all, and the reply would have no id (itself a
+// malformed JSON-RPC body).
 func TestRunStdio_UnknownNotification(t *testing.T) {
-	// Per JSON-RPC 2.0 §4.1, replying with -32601 Method not found in
-	// response to a notification is doubly wrong: the server must not
-	// reply at all, and the reply has no id (which is itself a malformed
-	// JSON-RPC body).
 	for _, method := range []string{
 		"notifications/cancelled",
 		"notifications/roots/list_changed",
@@ -555,12 +556,12 @@ func TestRunStdio_UnknownNotification(t *testing.T) {
 	}
 }
 
+// TestRunStdio_NullIDIsRequest_UnknownMethod is the regression for issue
+// #152: JSON-RPC 2.0 distinguishes "id absent" (notification, no reply)
+// from "id: null" (a request whose id happens to be null; reply
+// required). A request with explicit null id targeting an unknown
+// method must receive a -32601 response, not be silently dropped.
 func TestRunStdio_NullIDIsRequest_UnknownMethod(t *testing.T) {
-	// Regression for issue #152. JSON-RPC 2.0 distinguishes "id absent"
-	// (notification, no reply) from "id: null" (a request whose id
-	// happens to be null; reply required). A request with explicit
-	// null id targeting an unknown method must receive a -32601
-	// response, not be silently dropped.
 	server := NewServer(&mockToolProvider{})
 	input := `{"jsonrpc":"2.0","id":null,"method":"unknown/method"}` + "\n"
 
@@ -578,10 +579,11 @@ func TestRunStdio_NullIDIsRequest_UnknownMethod(t *testing.T) {
 	}
 }
 
+// TestRunStdio_NullIDIsRequest_Ping is the companion to
+// TestRunStdio_NullIDIsRequest_UnknownMethod for a method the
+// dispatcher recognises: a ping with explicit "id": null is a request
+// and must be answered with the standard empty-object result.
 func TestRunStdio_NullIDIsRequest_Ping(t *testing.T) {
-	// A ping with explicit "id": null is a request and must be answered.
-	// Companion to TestRunStdio_NullIDIsRequest_UnknownMethod that
-	// exercises a method the dispatcher recognises.
 	server := NewServer(&mockToolProvider{})
 	input := `{"jsonrpc":"2.0","id":null,"method":"ping"}` + "\n"
 

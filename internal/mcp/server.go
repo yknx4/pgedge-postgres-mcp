@@ -220,10 +220,11 @@ func (s *Server) handleInitialize(req JSONRPCRequest) {
 	sendResponse(req.ID, result)
 }
 
+// handlePing replies with the standard empty-object result. Notifications
+// are filtered out by Run before reaching dispatch, so every ping that
+// arrives here is a request requiring a response — including one whose
+// id is explicitly null.
 func (s *Server) handlePing(req JSONRPCRequest) {
-	// Notifications are filtered out by Run before reaching dispatch, so
-	// every ping that arrives here is a request requiring a response —
-	// including one whose id is explicitly null.
 	sendResponse(req.ID, map[string]interface{}{})
 }
 
