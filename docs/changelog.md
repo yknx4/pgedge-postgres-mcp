@@ -47,6 +47,16 @@ and this project adheres to
 
 ### Added
 
+- The installer detects running Postgres instances and offers
+  to connect to them, with automatic database listing.
+
+- Added `--detect` / `-Detect` flag for non-interactive
+  auto-connection to detected Postgres instances.
+
+- The installer detects previous installations and offers
+  to update the binary or reconfigure the database connection
+  instead of re-running the full install flow.
+
 - Schema metadata cache now refreshes automatically based on a
   configurable TTL. The `metadata_ttl` database option controls
   how long cached metadata remains valid (default: 5 minutes).
@@ -62,6 +72,10 @@ and this project adheres to
   token and needing access to multiple databases). The setting is
   honored by both the single-database and multi-database
   initialization paths. (#167)
+### Fixed
+
+- Fixed port detection on Windows; the installer now reliably
+  detects Postgres instances on all network addresses.
 
 ## [1.0.0] - 2026-03-27
 

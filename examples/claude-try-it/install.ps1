@@ -8,6 +8,8 @@
 #
 # Usage (with flags, saved locally):
 #   .\install.ps1 -Demo
+#   .\install.ps1 -Detect
+#   .\install.ps1 -Detect -DbPort 5433
 #   .\install.ps1 -OwnDb -DbHost localhost -DbPort 5432 -DbName mydb -DbUser me -DbPass secret
 #
 # What it does:
@@ -19,6 +21,7 @@ param(
     [switch]$Demo,
     [switch]$OwnDb,
     [switch]$InstallDocker,
+    [switch]$Detect,
     [string]$DbHost,
     [string]$DbPort,
     [string]$DbName,
@@ -48,6 +51,8 @@ $script:DbUser       = $DbUser
 $script:DbPass       = $DbPass
 $script:DbConfigured = $false
 $script:DemoPort     = $DemoPort
+$script:AuthUser     = ""
+$script:DetectedInstances = @()
 
 # --- Helper functions -----------------------------------------------------
 
@@ -133,6 +138,7 @@ function Install-Binary {
 
     Copy-Item $source.FullName (Join-Path $BinDir $binaryName) -Force
     Remove-Item $tmpDir -Recurse -Force
+    Set-Content -Path (Join-Path $BinDir ".version") -Value $script:Version
 
     Write-Ok "Binary installed: $(Join-Path $BinDir $binaryName)"
 }
@@ -224,44 +230,119 @@ function Select-Database {
         Start-DemoDatabase
         return
     }
+    if ($Detect) {
+        $script:DetectedInstances = Find-PostgresInstance
+        if ($script:DetectedInstances.Count -eq 0) {
+            Write-Host ""
+            Write-Host "DETECT_NO_INSTANCES"
+            Write-Host "No reachable PostgreSQL instance found. Re-run with:"
+            Write-Host "  -OwnDb -DbHost HOST -DbPort PORT -DbName DB -DbUser USER -DbPass PASS"
+            $script:DbConfigured = $false
+            return
+        }
+        Connect-ExistingAuto -TargetPort $DbPort
+        return
+    }
+
+    # Detect instances
+    $script:DetectedInstances = Find-PostgresInstance
 
     # Non-interactive — output choices for Claude
     if (-not (Test-Interactive)) {
         Write-Host ""
         Write-Host "DATABASE_CHOICE_NEEDED"
         Write-Host "The MCP server needs a PostgreSQL database to connect to."
-        Write-Host "Options:"
-        Write-Host "  1. Demo database - sample Northwind data, requires Docker"
-        Write-Host "  2. Your own database - provide connection details"
-        Write-Host ""
-        Write-Host "Re-run with flags:"
-        Write-Host "  -Demo                              (start demo database with Docker)"
-        Write-Host "  -InstallDocker                     (install Docker first, then demo)"
-        Write-Host "  -OwnDb -DbHost HOST -DbPort PORT -DbName DB -DbUser USER -DbPass PASS"
+        if ($script:DetectedInstances.Count -gt 0) {
+            $ports = ($script:DetectedInstances | ForEach-Object { $_.Port }) -join ", "
+            Write-Host ""
+            Write-Host "Detected PostgreSQL on port(s): $ports"
+            Write-Host ""
+            Write-Host "Options:"
+            Write-Host "  1. Connect to detected instance - re-run with: -Detect"
+            Write-Host "  2. Demo database - re-run with: -Demo"
+            Write-Host "  3. Your own database - re-run with: -OwnDb -DbHost HOST -DbPort PORT -DbName DB -DbUser USER -DbPass PASS"
+        } else {
+            Write-Host "Options:"
+            Write-Host "  1. Demo database - re-run with: -Demo"
+            Write-Host "  2. Your own database - re-run with: -OwnDb -DbHost HOST -DbPort PORT -DbName DB -DbUser USER -DbPass PASS"
+        }
         Write-Host ""
         $script:DbConfigured = $false
         return
     }
 
-    # Interactive
+    # Interactive menu
     Write-Host ""
     Write-Host "  The MCP server needs a PostgreSQL database to connect to."
-    Write-Host ""
-    Write-Host "  Which would you like?"
-    Write-Host ""
-    Write-Host "    1) Load a sample database (Northwind - customers, orders, products)"
-    Write-Host "       Requires Docker. Great for trying things out."
-    Write-Host ""
-    Write-Host "    2) Connect to my own PostgreSQL database"
-    Write-Host "       You'll provide the connection details."
-    Write-Host ""
 
-    $choice = Read-Prompt "  Enter 1 or 2" "1"
+    if ($script:DetectedInstances.Count -gt 0) {
+        Write-Host ""
+        Write-Host "  I found PostgreSQL running on:"
+        foreach ($inst in $script:DetectedInstances) {
+            if ($inst.Confirmed) {
+                Write-Host "    * port $($inst.Port)"
+            } else {
+                Write-Host "    * port $($inst.Port) (likely PostgreSQL)"
+            }
+        }
 
-    switch ($choice) {
-        "1" { Start-DemoDatabase }
-        "2" { Set-OwnDatabase }
-        default { Write-Info "Defaulting to sample database..."; Start-DemoDatabase }
+        $defaultPort = $script:DetectedInstances[0].Port
+
+        Write-Host ""
+        Write-Host "  Which would you like?"
+        Write-Host ""
+        Write-Host "    1) Connect to an existing instance (port $defaultPort)"
+        Write-Host "       I'll help you pick a database."
+        Write-Host ""
+        Write-Host "    2) Load a sample database (Northwind - customers, orders, products)"
+        Write-Host "       Requires Docker. Runs on a non-conflicting port."
+        Write-Host ""
+        Write-Host "    3) Connect to a different PostgreSQL database"
+        Write-Host "       You'll provide the connection details."
+        Write-Host ""
+
+        $promptText = "  Enter 1, 2, or 3"
+        if ($script:DetectedInstances.Count -gt 1) {
+            $promptText = "  Enter 1, 2, or 3 (or 1:<port> to pick a specific instance)"
+        }
+        $choice = Read-Prompt $promptText "1"
+
+        $targetPort = ""
+        if ($choice -match '^1:(\d+)$') {
+            $targetPort = $Matches[1]
+            $choice = "1"
+        }
+
+        switch ($choice) {
+            "1" { Connect-ExistingInstance -TargetPort $targetPort }
+            "2" { Start-DemoDatabase }
+            "3" { Set-OwnDatabase }
+            default {
+                Write-Info "Defaulting to existing instance..."
+                Connect-ExistingInstance -TargetPort $targetPort
+            }
+        }
+    } else {
+        Write-Host ""
+        Write-Host "  Which would you like?"
+        Write-Host ""
+        Write-Host "    1) Load a sample database (Northwind - customers, orders, products)"
+        Write-Host "       Requires Docker. Great for trying things out."
+        Write-Host ""
+        Write-Host "    2) Connect to my own PostgreSQL database"
+        Write-Host "       You'll provide the connection details."
+        Write-Host ""
+
+        $choice = Read-Prompt "  Enter 1 or 2" "1"
+
+        switch ($choice) {
+            "1" { Start-DemoDatabase }
+            "2" { Set-OwnDatabase }
+            default {
+                Write-Info "Defaulting to sample database..."
+                Start-DemoDatabase
+            }
+        }
     }
 }
 
@@ -352,18 +433,16 @@ function Start-DemoDatabase {
 
 function Find-FreePort {
     foreach ($port in 5432, 5433, 5434, 5435, 5436) {
-        try {
-            $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $port)
-            $listener.Start()
-            $listener.Stop()
+        $inUse = Get-NetTCPConnection -LocalPort $port `
+            -State Listen -ErrorAction SilentlyContinue
+        if (-not $inUse) {
             return $port
-        } catch {
-            continue
         }
     }
-    # Last resort: let .NET pick
+    # Last resort: let .NET pick an ephemeral port
     try {
-        $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+        $listener = [System.Net.Sockets.TcpListener]::new(
+            [System.Net.IPAddress]::Loopback, 0)
         $listener.Start()
         $port = $listener.LocalEndpoint.Port
         $listener.Stop()
@@ -371,6 +450,392 @@ function Find-FreePort {
     } catch {
         return 0
     }
+}
+
+# --- Detect running Postgres instances -----------------------------------
+
+# Returns an array of [PSCustomObject]@{ Port; Confirmed }
+function Find-PostgresInstance {
+    $results = @()
+    $hasPgReady = [bool](Get-Command pg_isready `
+        -ErrorAction SilentlyContinue)
+
+    foreach ($port in 5432, 5433, 5434, 5435, 5436) {
+        $listening = $false
+        $confirmed = $false
+
+        if ($hasPgReady) {
+            $prevPref = $ErrorActionPreference
+            $ErrorActionPreference = 'SilentlyContinue'
+            try {
+                & pg_isready -h localhost -p $port -t 2 2>$null | Out-Null
+                if ($LASTEXITCODE -eq 0) {
+                    $listening = $true
+                    $confirmed = $true
+                }
+            } catch {}
+            finally { $ErrorActionPreference = $prevPref }
+        }
+
+        if (-not $listening) {
+            $conn = Get-NetTCPConnection -LocalPort $port `
+                -State Listen -ErrorAction SilentlyContinue
+            if ($conn) {
+                $listening = $true
+            }
+        }
+
+        if ($listening) {
+            $results += [PSCustomObject]@{
+                Port = $port
+                Confirmed = $confirmed
+            }
+        }
+    }
+
+    return $results
+}
+
+# --- Try passwordless auth -----------------------------------------------
+
+function Test-PasswordlessAuth {
+    param([int]$Port)
+    $script:AuthUser = ""
+
+    if (-not (Get-Command psql -ErrorAction SilentlyContinue)) {
+        return $false
+    }
+
+    $prevPref = $ErrorActionPreference
+    $prevPgPassword = $env:PGPASSWORD
+    try {
+        $env:PGPASSWORD = ""
+        $ErrorActionPreference = 'SilentlyContinue'
+
+        & psql -h localhost -p $Port -U postgres -d postgres -w -c "SELECT 1" 2>$null | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            $script:AuthUser = "postgres"
+            return $true
+        }
+
+        $osUser = $env:USERNAME
+        if ($osUser -ne "postgres") {
+            & psql -h localhost -p $Port -U $osUser -d postgres -w -c "SELECT 1" 2>$null | Out-Null
+            if ($LASTEXITCODE -eq 0) {
+                $script:AuthUser = $osUser
+                return $true
+            }
+        }
+
+        return $false
+    } catch {
+        return $false
+    } finally {
+        $env:PGPASSWORD = $prevPgPassword
+        $ErrorActionPreference = $prevPref
+    }
+}
+
+# --- List user databases -------------------------------------------------
+
+function Get-UserDatabases {
+    param([int]$Port, [string]$User, [string]$Password)
+    $prevPref = $ErrorActionPreference
+    $prevPgPassword = $env:PGPASSWORD
+    try {
+        $env:PGPASSWORD = $Password
+        $ErrorActionPreference = 'SilentlyContinue'
+        $output = & psql -h localhost -p $Port -U $User -d postgres -w -t -A -c @"
+SELECT datname FROM pg_database
+WHERE datistemplate = false
+  AND datname NOT IN ('postgres')
+ORDER BY datname
+"@ 2>$null
+        if ($LASTEXITCODE -eq 0 -and $output) {
+            return ($output | Where-Object {
+                -not [string]::IsNullOrWhiteSpace($_)
+            })
+        }
+    } catch {}
+    finally {
+        $env:PGPASSWORD = $prevPgPassword
+        $ErrorActionPreference = $prevPref
+    }
+    return @()
+}
+
+# --- Connect to existing instance ----------------------------------------
+
+function Connect-ExistingInstance {
+    param([string]$TargetPort)
+
+    $hasPsql = [bool](Get-Command psql -ErrorAction SilentlyContinue)
+    $instances = $script:DetectedInstances
+
+    # Build combined database list
+    $options = @()
+
+    foreach ($inst in $instances) {
+        if ($TargetPort -and $inst.Port -ne [int]$TargetPort) { continue }
+
+        if ($hasPsql -and (Test-PasswordlessAuth -Port $inst.Port)) {
+            $dbs = @(Get-UserDatabases -Port $inst.Port `
+                -User $script:AuthUser -Password "")
+            $label = if ($inst.Confirmed) { "PostgreSQL" } else { "service (likely PostgreSQL)" }
+            Write-Host ""
+            Write-Host "    Port $($inst.Port) ($label) — connected as '$($script:AuthUser)'"
+            if ($dbs.Count -gt 0) {
+                foreach ($db in $dbs) {
+                    $options += [PSCustomObject]@{
+                        Type = "db"; Port = $inst.Port
+                        User = $script:AuthUser; Password = ""
+                        DbName = $db; InstIndex = $null
+                    }
+                    Write-Host "      $($options.Count)) $db"
+                }
+            } else {
+                Write-Host "      (no user databases found)"
+            }
+        } else {
+            Write-Host ""
+            if ($hasPsql) {
+                Write-Host "    Port $($inst.Port) — authentication required"
+                $options += [PSCustomObject]@{
+                    Type = "auth"; Port = $inst.Port
+                    User = ""; Password = ""
+                    DbName = ""; InstIndex = $null
+                }
+                Write-Host "      $($options.Count)) Enter credentials for this instance"
+            } else {
+                Write-Host "    Port $($inst.Port) — psql not installed, cannot list databases"
+                $options += [PSCustomObject]@{
+                    Type = "manualPort"; Port = $inst.Port
+                    User = ""; Password = ""
+                    DbName = ""; InstIndex = $null
+                }
+                Write-Host "      $($options.Count)) Enter connection details for port $($inst.Port)"
+            }
+        }
+    }
+
+    if ($options.Count -eq 0) {
+        Write-Warn "No instances to connect to."
+        $script:DbConfigured = $false
+        return
+    }
+
+    Write-Host ""
+    Write-Host "    Other options:"
+    $options += [PSCustomObject]@{
+        Type = "demo"; Port = 0; User = ""; Password = ""
+        DbName = ""; InstIndex = $null
+    }
+    Write-Host "      $($options.Count)) Start a demo database instead (Docker, Northwind)"
+    $options += [PSCustomObject]@{
+        Type = "manual"; Port = 0; User = ""; Password = ""
+        DbName = ""; InstIndex = $null
+    }
+    Write-Host "      $($options.Count)) Enter connection details manually"
+    Write-Host ""
+
+    $choice = Read-Prompt "  Enter a number" "1"
+
+    if ($choice -match '^\d+$') {
+        $idx = [int]$choice - 1
+    } else {
+        Write-Info "Defaulting to demo database..."
+        Start-DemoDatabase
+        return
+    }
+
+    if ($idx -lt 0 -or $idx -ge $options.Count) {
+        Write-Warn "Invalid choice. Defaulting to demo database."
+        Start-DemoDatabase
+        return
+    }
+
+    $selected = $options[$idx]
+    switch ($selected.Type) {
+        "db" {
+            $script:DbHost = "localhost"
+            $script:DbPort = "$($selected.Port)"
+            $script:DbName = $selected.DbName
+            $script:DbUser = $selected.User
+            $script:DbPass = $selected.Password
+            $script:DbConfigured = $true
+            Write-Ok "Using database: $($selected.DbName) on localhost:$($selected.Port) ($($selected.User))"
+        }
+        "auth" {
+            Invoke-CredentialPrompt -Port $selected.Port
+        }
+        "manualPort" {
+            $script:DbHost = "localhost"
+            $script:DbPort = "$($selected.Port)"
+            Set-OwnDatabase
+        }
+        "demo" {
+            Start-DemoDatabase
+        }
+        "manual" {
+            Set-OwnDatabase
+        }
+    }
+}
+
+# --- Prompt for credentials and list databases ----------------------------
+
+function Invoke-CredentialPrompt {
+    param([int]$Port)
+    $attempts = 0
+
+    while ($attempts -lt 2) {
+        Write-Host ""
+        Write-Host "  Connection to port $Port requires authentication."
+        Write-Host ""
+
+        $user = Read-Prompt "  Username [postgres]" "postgres"
+
+        if (Test-Interactive) {
+            if ($PSVersionTable.PSVersion.Major -ge 7) {
+                $pass = Read-Host -Prompt "  Password" -MaskInput
+            } else {
+                $secure = Read-Host -Prompt "  Password" -AsSecureString
+                $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+                try {
+                    $pass = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+                } finally {
+                    [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+                }
+            }
+        } else {
+            $pass = ""
+        }
+
+        $prevPref = $ErrorActionPreference
+        $prevPgPassword = $env:PGPASSWORD
+        try {
+            $env:PGPASSWORD = $pass
+            $ErrorActionPreference = 'SilentlyContinue'
+            & psql -h localhost -p $Port -U $user -d postgres -w -c "SELECT 1" 2>$null | Out-Null
+            if ($LASTEXITCODE -eq 0) {
+                Write-Ok "Connected to port $Port as '$user'"
+
+                $dbs = @(Get-UserDatabases -Port $Port -User $user -Password $pass)
+                if ($dbs.Count -gt 0) {
+                    Write-Host ""
+                    Write-Host "  Databases on port ${Port}:"
+                    for ($i = 0; $i -lt $dbs.Count; $i++) {
+                        Write-Host "    $($i + 1)) $($dbs[$i])"
+                    }
+                    Write-Host ""
+
+                    $dbChoice = Read-Prompt "  Enter a number (or type a database name)" "1"
+                    if ($dbChoice -match '^\d+$') {
+                        $dbIdx = [int]$dbChoice - 1
+                        if ($dbIdx -ge 0 -and $dbIdx -lt $dbs.Count) {
+                            $script:DbName = $dbs[$dbIdx]
+                        } else {
+                            $script:DbName = $dbChoice
+                        }
+                    } else {
+                        $script:DbName = $dbChoice
+                    }
+                } else {
+                    Write-Host ""
+                    Write-Host "  No user databases found on port $Port."
+                    Write-Host ""
+                    $script:DbName = Read-Prompt "  Database name" ""
+                    if (-not $script:DbName) {
+                        Write-Warn "Database name is required."
+                        $script:DbConfigured = $false
+                        return
+                    }
+                }
+
+                $script:DbHost = "localhost"
+                $script:DbPort = "$Port"
+                $script:DbUser = $user
+                $script:DbPass = $pass
+                $script:DbConfigured = $true
+                Write-Ok "Using database: $($script:DbName) on localhost:$Port ($user)"
+                return
+            }
+        } catch {}
+        finally {
+            $env:PGPASSWORD = $prevPgPassword
+            $ErrorActionPreference = $prevPref
+        }
+
+        Write-Warn "Authentication failed."
+        $attempts++
+    }
+
+    Write-Warn "Could not connect to port $Port. Try the manual option."
+    Write-Host ""
+    Set-OwnDatabase
+}
+
+# --- Auto-connect (non-interactive -Detect mode) --------------------------
+
+function Connect-ExistingAuto {
+    param([string]$TargetPort)
+
+    $hasPsql = [bool](Get-Command psql -ErrorAction SilentlyContinue)
+    $matchedTarget = if ([string]::IsNullOrWhiteSpace($TargetPort)) {
+        $true } else { $false }
+
+    foreach ($inst in $script:DetectedInstances) {
+        if ($TargetPort -and $inst.Port -ne [int]$TargetPort) {
+            continue
+        }
+        if ($TargetPort) { $matchedTarget = $true }
+
+        if ($hasPsql -and (Test-PasswordlessAuth -Port $inst.Port)) {
+            if ($script:DbName) {
+                $dbs = @(Get-UserDatabases -Port $inst.Port `
+                    -User $script:AuthUser -Password "")
+                if ($dbs -ccontains $script:DbName) {
+                    $script:DbHost = "localhost"
+                    $script:DbPort = "$($inst.Port)"
+                    $script:DbUser = $script:AuthUser
+                    $script:DbPass = ""
+                    $script:DbConfigured = $true
+                    Write-Ok "Using database: $($script:DbName) on localhost:$($inst.Port) ($($script:AuthUser))"
+                    return
+                }
+                Write-Warn "Database '$($script:DbName)' not found on port $($inst.Port)"
+                continue
+            }
+
+            $dbs = @(Get-UserDatabases -Port $inst.Port `
+                -User $script:AuthUser -Password "")
+            if ($dbs.Count -gt 0) {
+                $script:DbHost = "localhost"
+                $script:DbPort = "$($inst.Port)"
+                $script:DbName = $dbs[0]
+                $script:DbUser = $script:AuthUser
+                $script:DbPass = ""
+                $script:DbConfigured = $true
+                Write-Ok "Auto-detected: $($dbs[0]) on localhost:$($inst.Port) ($($script:AuthUser))"
+                return
+            }
+        }
+    }
+
+    Write-Host ""
+    if (-not $hasPsql) {
+        Write-Host "DETECT_PSQL_MISSING"
+        Write-Host "psql is required for -Detect auto-connection."
+    } elseif (-not $matchedTarget) {
+        Write-Host "DETECT_PORT_NOT_FOUND"
+        Write-Host "No detected PostgreSQL instance on port $TargetPort."
+    } else {
+        Write-Host "DETECT_AUTH_FAILED"
+        Write-Host "Could not authenticate to any detected instance."
+    }
+    Write-Host "Re-run with explicit credentials:"
+    Write-Host "  -OwnDb -DbHost HOST -DbPort PORT -DbName DB -DbUser USER -DbPass PASS"
+    $script:DbConfigured = $false
 }
 
 # --- Remove old demo containers ------------------------------------------
@@ -591,8 +1056,10 @@ function Set-OwnDatabase {
     Write-Host "  Enter your PostgreSQL connection details:"
     Write-Host ""
 
-    $script:DbHost = Read-Prompt "  Host [localhost]" "localhost"
-    $script:DbPort = Read-Prompt "  Port [5432]" "5432"
+    $defaultHost = if ($script:DbHost) { $script:DbHost } else { "localhost" }
+    $defaultPort = if ($script:DbPort) { $script:DbPort } else { "5432" }
+    $script:DbHost = Read-Prompt "  Host [$defaultHost]" $defaultHost
+    $script:DbPort = Read-Prompt "  Port [$defaultPort]" $defaultPort
     $script:DbName = Read-Prompt "  Database name" ""
     if (-not $script:DbName) { Write-Warn "Database name is required."; $script:DbConfigured = $false; return }
     $script:DbUser = Read-Prompt "  Username" ""
@@ -721,8 +1188,8 @@ function Set-ClaudeDesktopConfig {
             $raw = Get-Content $configFile -Raw
             $config = $raw | ConvertFrom-Json
         } catch {
-            Write-Warn "Claude Desktop config ($configFile) contains invalid JSON — skipping to avoid overwriting."
-            return
+            Write-Warn "Claude Desktop config ($configFile) contains invalid JSON — backing up to $configFile.bak"
+            Rename-Item $configFile "$configFile.bak" -Force
         }
     }
 
@@ -747,6 +1214,22 @@ function Set-ClaudeDesktopConfig {
 }
 
 # --- Summary --------------------------------------------------------------
+
+function Write-UpdateSummary {
+    Write-Host (([string][char]0x2550) * 54)
+    Write-Host "  Update complete!"
+    Write-Host (([string][char]0x2550) * 54)
+    Write-Host ""
+    Write-Host "  Your existing database configuration is unchanged."
+    Write-Host ""
+    Write-Host "  Claude Code:    start a new conversation to use"
+    Write-Host "                  the updated server"
+    Write-Host "  Claude Desktop: restart the app to pick up the"
+    Write-Host "                  new version"
+    Write-Host ""
+    Write-Host (([string][char]0x2550) * 54)
+    Write-Host ""
+}
 
 function Write-Summary {
     Write-Host ""
@@ -779,6 +1262,111 @@ function Write-Summary {
     Write-Host ""
 }
 
+# --- Stop stale MCP server processes --------------------------------------
+
+function Stop-StaleProcesses {
+    $procs = Get-Process -Name 'pgedge-postgres-mcp' -ErrorAction SilentlyContinue
+    if ($procs) {
+        $count = @($procs).Count
+        Write-Info "Stopping $count running MCP server process(es)..."
+        $procs | Stop-Process -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 1
+    }
+}
+
+# --- Check for existing installation -------------------------------------
+
+function Test-ExistingInstall {
+    $explicitReconfigure = $Detect -or $Demo -or $OwnDb -or $InstallDocker
+    $binaryExt = if ($script:OS -eq "windows") { ".exe" } else { "" }
+    $binary = Join-Path $BinDir "pgedge-postgres-mcp$binaryExt"
+    if (-not (Test-Path $binary)) { return $false }
+
+    $versionFile = Join-Path $BinDir ".version"
+    $installedVersion = ""
+    if (Test-Path $versionFile) {
+        $raw = Get-Content $versionFile -Raw
+        if ($null -ne $raw) { $installedVersion = $raw.Trim() }
+    }
+
+    if ($installedVersion -eq $script:Version) {
+        Write-Host ""
+        Write-Ok "pgEdge MCP Server $($script:Version) is already up to date."
+        Write-Host ""
+        if ($explicitReconfigure) {
+            Select-Database
+            if ($script:DbConfigured) {
+                Write-Host ""
+                Set-ClaudeCodeConfig
+                Set-ClaudeDesktopConfig
+                Write-Summary
+            }
+        } elseif (Test-Interactive) {
+            $reconfigure = Read-Prompt "  Want to reconfigure the database connection? (y/n)" "n"
+            if ($reconfigure -match '^[Yy]') {
+                Write-Host ""
+                Select-Database
+                if ($script:DbConfigured) {
+                    Write-Host ""
+                    Set-ClaudeCodeConfig
+                    Set-ClaudeDesktopConfig
+                    Write-Summary
+                }
+            } else {
+                Write-Host ""
+                Write-Info "Nothing to do."
+                Write-Host ""
+                Write-Host "  Claude Code:    start a new conversation"
+                Write-Host "  Claude Desktop: restart the app, then start chatting"
+                Write-Host ""
+            }
+        } else {
+            Write-Info "Already up to date. Nothing to do."
+        }
+        return $true
+    }
+
+    Write-Host ""
+    if ($installedVersion) {
+        Write-Info "pgEdge MCP Server $installedVersion is installed."
+    } else {
+        Write-Info "pgEdge MCP Server (unknown version) is installed."
+    }
+    Write-Ok "A newer version ($($script:Version)) is available."
+    Write-Host ""
+    if (Test-Interactive) {
+        $update = Read-Prompt "  Update? (y/n)" "y"
+        if ($update -match '^[Yy]') {
+            Stop-StaleProcesses
+            Install-Binary
+            Write-Ok "Updated to $($script:Version)."
+            Write-Host ""
+            if (-not $explicitReconfigure) { Write-UpdateSummary }
+        } else {
+            Write-Host ""
+            Write-Info "Skipping update. Exiting."
+            return $true
+        }
+    } else {
+        Stop-StaleProcesses
+        Install-Binary
+        Write-Ok "Updated to $($script:Version)."
+        Write-Host ""
+        if (-not $explicitReconfigure) { Write-UpdateSummary }
+    }
+
+    if ($explicitReconfigure) {
+        Select-Database
+        if ($script:DbConfigured) {
+            Write-Host ""
+            Set-ClaudeCodeConfig
+            Set-ClaudeDesktopConfig
+            Write-Summary
+        }
+    }
+    return $true
+}
+
 # --- Main -----------------------------------------------------------------
 
 function Main {
@@ -796,16 +1384,20 @@ function Main {
 
     Get-Platform
     Get-LatestVersion
+
+    if (Test-ExistingInstall) { return }
+
     Install-Binary
 
     Write-Host ""
     Select-Database
 
-    Write-Host ""
-    Set-ClaudeCodeConfig
-    Set-ClaudeDesktopConfig
-
-    Write-Summary
+    if ($script:DbConfigured) {
+        Write-Host ""
+        Set-ClaudeCodeConfig
+        Set-ClaudeDesktopConfig
+        Write-Summary
+    }
 }
 
 Main

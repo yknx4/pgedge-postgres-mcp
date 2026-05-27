@@ -6,6 +6,7 @@
 #
 # Usage (non-interactive, via Claude Code):
 #   curl -fsSL .../install.sh | bash -s -- --demo
+#   curl -fsSL .../install.sh | bash -s -- --detect
 #   curl -fsSL .../install.sh | bash -s -- --db-host=localhost --db-port=5432 --db-name=mydb --db-user=me --db-pass=secret
 #
 # What it does:
@@ -32,6 +33,7 @@ for arg in "$@"; do
   case "$arg" in
     --demo)          MODE="demo" ;;
     --own-db)        MODE="own" ;;
+    --detect)        MODE="detect" ;;
     --db-host=*)     DB_HOST="${arg#*=}" ;;
     --db-port=*)     DB_PORT="${arg#*=}" ;;
     --db-name=*)     DB_NAME="${arg#*=}" ;;
@@ -140,6 +142,7 @@ download_binary() {
   chmod +x "$BIN_DIR/pgedge-postgres-mcp"
   rm -rf "$tmp_dir"
 
+  echo "$VERSION" > "$BIN_DIR/.version"
   ok "Binary installed: $BIN_DIR/pgedge-postgres-mcp"
 }
 
@@ -201,7 +204,7 @@ install_docker() {
 # ─── Database choice ────────────────────────────────────────────────────────
 
 choose_database() {
-  # If mode was set via flags, skip prompts
+  # Flag-based modes (non-interactive)
   if [ "$MODE" = "demo" ]; then
     setup_demo_database
     return
@@ -218,45 +221,124 @@ choose_database() {
     return
   fi
 
-  # Non-interactive (Claude Code without flags) — output choices for Claude
+  if [ "$MODE" = "detect" ]; then
+    detect_postgres_instances
+    if [ ${#DETECTED_PORTS[@]} -eq 0 ]; then
+      echo ""
+      echo "DETECT_NO_INSTANCES"
+      echo "No reachable PostgreSQL instance found. Re-run with:"
+      echo "  --own-db --db-host=HOST --db-port=PORT --db-name=DB --db-user=USER --db-pass=PASS"
+      DB_CONFIGURED=false
+      return
+    fi
+    # Auto-connect to first instance, first database
+    local target_port=""
+    [ -n "$DB_PORT" ] && target_port="$DB_PORT"
+    connect_existing_auto "$target_port"
+    return
+  fi
+
+  # --- Detect existing instances ---
+  detect_postgres_instances
+
+  # Non-interactive without flags — output choices for Claude
   if ! has_tty; then
     echo ""
     echo "DATABASE_CHOICE_NEEDED"
     echo "The MCP server needs a PostgreSQL database to connect to."
-    echo "Options:"
-    echo "  1. Demo database — sample Northwind data, requires Docker"
-    echo "  2. Your own database — provide connection details"
-    echo ""
-    echo "Re-run with flags:"
-    echo "  --demo                              (start demo database with Docker)"
-    echo "  --install-docker                    (install Docker first, then demo)"
-    echo "  --own-db --db-host=HOST --db-port=PORT --db-name=DB --db-user=USER --db-pass=PASS"
+    if [ ${#DETECTED_PORTS[@]} -gt 0 ]; then
+      echo ""
+      echo "Detected PostgreSQL on port(s): ${DETECTED_PORTS[*]}"
+      echo ""
+      echo "Options:"
+      echo "  1. Connect to detected instance — re-run with: --detect"
+      echo "  2. Demo database — re-run with: --demo"
+      echo "  3. Your own database — re-run with: --own-db --db-host=HOST --db-port=PORT --db-name=DB --db-user=USER --db-pass=PASS"
+    else
+      echo "Options:"
+      echo "  1. Demo database — re-run with: --demo"
+      echo "  2. Your own database — re-run with: --own-db --db-host=HOST --db-port=PORT --db-name=DB --db-user=USER --db-pass=PASS"
+    fi
     echo ""
     DB_CONFIGURED=false
     return
   fi
 
-  # Interactive (human in terminal)
+  # --- Interactive menu ---
   echo ""
   echo "  The MCP server needs a PostgreSQL database to connect to."
-  echo ""
-  echo "  Which would you like?"
-  echo ""
-  echo "    1) Load a sample database (Northwind — customers, orders, products)"
-  echo "       Requires Docker. Great for trying things out."
-  echo ""
-  echo "    2) Connect to my own PostgreSQL database"
-  echo "       You'll provide the connection details."
-  echo ""
 
-  local choice
-  ask "  Enter 1 or 2: " choice
+  if [ ${#DETECTED_PORTS[@]} -gt 0 ]; then
+    echo ""
+    echo "  I found PostgreSQL running on:"
+    for i in "${!DETECTED_PORTS[@]}"; do
+      local port="${DETECTED_PORTS[$i]}"
+      local confirmed="${DETECTED_CONFIRMED[$i]}"
+      if [ "$confirmed" = "true" ]; then
+        echo "    * port $port"
+      else
+        echo "    * port $port (likely PostgreSQL)"
+      fi
+    done
 
-  case "$choice" in
-    1) setup_demo_database ;;
-    2) setup_own_database ;;
-    *) info "Defaulting to sample database..."; setup_demo_database ;;
-  esac
+    echo ""
+    echo "  Which would you like?"
+    echo ""
+    echo "    1) Connect to an existing instance (port ${DETECTED_PORTS[0]})"
+    echo "       I'll help you pick a database."
+    echo ""
+    echo "    2) Load a sample database (Northwind — customers, orders, products)"
+    echo "       Requires Docker. Runs on a non-conflicting port."
+    echo ""
+    echo "    3) Connect to a different PostgreSQL database"
+    echo "       You'll provide the connection details."
+    echo ""
+
+    local choice
+    if [ ${#DETECTED_PORTS[@]} -gt 1 ]; then
+      ask "  Enter 1, 2, or 3 (or 1:<port> to pick a specific instance): " choice
+    else
+      ask "  Enter 1, 2, or 3: " choice
+    fi
+
+    # Parse "1:port" syntax
+    local target_port=""
+    case "$choice" in
+      1:*)
+        target_port="${choice#1:}"
+        choice="1"
+        ;;
+    esac
+
+    case "$choice" in
+      1) connect_existing_instance "$target_port" ;;
+      2) setup_demo_database ;;
+      3) setup_own_database ;;
+      *) info "Defaulting to existing instance..."
+         connect_existing_instance "$target_port" ;;
+    esac
+  else
+    # No instances detected — show original two-option menu
+    echo ""
+    echo "  Which would you like?"
+    echo ""
+    echo "    1) Load a sample database (Northwind — customers, orders, products)"
+    echo "       Requires Docker. Great for trying things out."
+    echo ""
+    echo "    2) Connect to my own PostgreSQL database"
+    echo "       You'll provide the connection details."
+    echo ""
+
+    local choice
+    ask "  Enter 1 or 2: " choice
+
+    case "$choice" in
+      1) setup_demo_database ;;
+      2) setup_own_database ;;
+      *) info "Defaulting to sample database..."
+         setup_demo_database ;;
+    esac
+  fi
 }
 
 # ─── Demo database setup ────────────────────────────────────────────────────
@@ -349,10 +431,21 @@ setup_demo_database() {
 
 # ─── Find a free port ────────────────────────────────────────────────────────
 
+port_in_use() {
+  local p="$1"
+  if command -v lsof &>/dev/null; then
+    lsof -i ":$p" >/dev/null 2>&1
+  elif command -v ss &>/dev/null; then
+    ss -tlnH "sport = :$p" 2>/dev/null | grep -q .
+  else
+    (echo >/dev/tcp/localhost/"$p") 2>/dev/null
+  fi
+}
+
 find_free_port() {
   # Try preferred ports in order: 5432, 5433, 5434, 5435, 5436
   for port in 5432 5433 5434 5435 5436; do
-    if ! lsof -i ":$port" >/dev/null 2>&1; then
+    if ! port_in_use "$port"; then
       echo "$port"
       return
     fi
@@ -360,6 +453,396 @@ find_free_port() {
   # Last resort: let the OS pick
   python3 -c "import socket; s=socket.socket(); s.bind(('',0)); print(s.getsockname()[1]); s.close()" 2>/dev/null \
     || echo "0"
+}
+
+# ─── Detect running Postgres instances ─────────────────────────────────
+
+# Populates two parallel arrays:
+#   DETECTED_PORTS[]    — port numbers with listeners
+#   DETECTED_CONFIRMED[] — "true" if pg_isready confirmed Postgres
+detect_postgres_instances() {
+  DETECTED_PORTS=()
+  DETECTED_CONFIRMED=()
+
+  local has_pgready=false
+  command -v pg_isready &>/dev/null && has_pgready=true
+
+  for port in 5432 5433 5434 5435 5436; do
+    local listening=false confirmed=false
+
+    if $has_pgready; then
+      if pg_isready -h localhost -p "$port" -t 2 >/dev/null 2>&1; then
+        listening=true
+        confirmed=true
+      fi
+    fi
+
+    if ! $listening; then
+      if command -v lsof &>/dev/null; then
+        if lsof -iTCP:"$port" -sTCP:LISTEN -P -n >/dev/null 2>&1; then
+          listening=true
+        fi
+      elif command -v ss &>/dev/null; then
+        if ss -tlnH "sport = :$port" 2>/dev/null | grep -q .; then
+          listening=true
+        fi
+      fi
+    fi
+
+    if $listening; then
+      DETECTED_PORTS+=("$port")
+      DETECTED_CONFIRMED+=("$confirmed")
+    fi
+  done
+}
+
+# ─── Try passwordless auth against a Postgres instance ─────────────────
+
+# Sets AUTH_USER on success, returns 1 on failure.
+# Requires psql on PATH.
+try_passwordless_auth() {
+  local port="$1"
+  AUTH_USER=""
+
+  if ! command -v psql &>/dev/null; then
+    return 1
+  fi
+
+  # Try 'postgres' user first (most common superuser)
+  if PGPASSWORD="" psql -h localhost -p "$port" -U postgres -d postgres \
+       -w -c "SELECT 1" >/dev/null 2>&1; then
+    AUTH_USER="postgres"
+    return 0
+  fi
+
+  # Try current OS username
+  local os_user
+  os_user="$(whoami)"
+  if [ "$os_user" != "postgres" ]; then
+    if PGPASSWORD="" psql -h localhost -p "$port" -U "$os_user" -d postgres \
+         -w -c "SELECT 1" >/dev/null 2>&1; then
+      AUTH_USER="$os_user"
+      return 0
+    fi
+  fi
+
+  return 1
+}
+
+# ─── List user databases on a Postgres instance ────────────────────────
+
+# Requires psql. Prints database names, one per line.
+# Filters out template and system databases.
+list_databases() {
+  local port="$1" user="$2" password="${3:-}"
+
+  PGPASSWORD="$password" psql -h localhost -p "$port" -U "$user" -d postgres \
+    -w -t -A -c "
+    SELECT datname FROM pg_database
+    WHERE datistemplate = false
+      AND datname NOT IN ('postgres')
+    ORDER BY datname
+  " 2>/dev/null
+}
+
+# ─── Connect to an existing Postgres instance ──────────────────────────
+
+connect_existing_instance() {
+  local target_port="${1:-}"
+
+  # Build arrays of instance state
+  local -a inst_ports=()
+  local -a inst_confirmed=()
+  local -a inst_users=()
+  local -a inst_passwords=()
+  local -a inst_authed=()
+  local -a all_db_names=()
+  local -a all_db_ports=()
+  local -a all_db_users=()
+  local -a all_db_passwords=()
+
+  local has_psql=false
+  command -v psql &>/dev/null && has_psql=true
+
+  for i in "${!DETECTED_PORTS[@]}"; do
+    local port="${DETECTED_PORTS[$i]}"
+    local confirmed="${DETECTED_CONFIRMED[$i]}"
+
+    # If user specified a port, skip others
+    if [ -n "$target_port" ] && [ "$port" != "$target_port" ]; then
+      continue
+    fi
+
+    inst_ports+=("$port")
+    inst_confirmed+=("$confirmed")
+
+    if $has_psql && try_passwordless_auth "$port"; then
+      inst_users+=("$AUTH_USER")
+      inst_passwords+=("")
+      inst_authed+=("true")
+
+      # List databases on this instance
+      local dbs
+      dbs=$(list_databases "$port" "$AUTH_USER" "")
+      if [ -n "$dbs" ]; then
+        while IFS= read -r db; do
+          all_db_names+=("$db")
+          all_db_ports+=("$port")
+          all_db_users+=("$AUTH_USER")
+          all_db_passwords+=("")
+        done <<< "$dbs"
+      fi
+    else
+      inst_users+=("")
+      inst_passwords+=("")
+      inst_authed+=("false")
+    fi
+  done
+
+  if [ ${#inst_ports[@]} -eq 0 ]; then
+    warn "No instances to connect to."
+    DB_CONFIGURED=false
+    return
+  fi
+
+  # --- Present the combined menu ---
+
+  echo ""
+  local option_num=1
+  local -a option_type=()
+  local -a option_data=()
+
+  for i in "${!inst_ports[@]}"; do
+    local port="${inst_ports[$i]}"
+    local user="${inst_users[$i]}"
+    local authed="${inst_authed[$i]}"
+
+    if [ "$authed" = "true" ]; then
+      local label="PostgreSQL"
+      [ "${inst_confirmed[$i]:-false}" = "true" ] \
+        || label="service (likely PostgreSQL)"
+      echo "    Port $port ($label) — connected as '$user'"
+
+      # Show databases for this instance
+      local found_db=false
+      for j in "${!all_db_names[@]}"; do
+        if [ "${all_db_ports[$j]}" = "$port" ]; then
+          echo "      $option_num) ${all_db_names[$j]}"
+          option_type+=("db")
+          option_data+=("$j")
+          option_num=$((option_num + 1))
+          found_db=true
+        fi
+      done
+
+      if ! $found_db; then
+        echo "      (no user databases found)"
+      fi
+    else
+      if $has_psql; then
+        echo "    Port $port — authentication required"
+        echo "      $option_num) Enter credentials for this instance"
+        option_type+=("auth")
+        option_data+=("$i")
+        option_num=$((option_num + 1))
+      else
+        echo "    Port $port — psql not installed, cannot list databases"
+        echo "      $option_num) Enter connection details for port $port"
+        option_type+=("manualPort")
+        option_data+=("$port")
+        option_num=$((option_num + 1))
+      fi
+    fi
+
+    echo ""
+  done
+
+  echo "    Other options:"
+  echo "      $option_num) Start a demo database instead (Docker, Northwind)"
+  option_type+=("demo")
+  option_data+=("")
+  option_num=$((option_num + 1))
+
+  echo "      $option_num) Enter connection details manually"
+  option_type+=("manual")
+  option_data+=("")
+  echo ""
+
+  local choice
+  ask "  Enter a number: " choice
+  choice="${choice:-1}"
+
+  # Validate choice is a number in range
+  if ! [[ "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] \
+       || [ "$choice" -gt "${#option_type[@]}" ]; then
+    warn "Invalid choice. Defaulting to demo database."
+    setup_demo_database
+    return
+  fi
+
+  local idx=$((choice - 1))
+  case "${option_type[$idx]}" in
+    db)
+      local db_idx="${option_data[$idx]}"
+      DB_HOST="localhost"
+      DB_PORT="${all_db_ports[$db_idx]}"
+      DB_NAME="${all_db_names[$db_idx]}"
+      DB_USER="${all_db_users[$db_idx]}"
+      DB_PASS="${all_db_passwords[$db_idx]}"
+      DB_CONFIGURED=true
+      ok "Using database: $DB_NAME on localhost:$DB_PORT ($DB_USER)"
+      ;;
+    auth)
+      local inst_idx="${option_data[$idx]}"
+      local port="${inst_ports[$inst_idx]}"
+      prompt_credentials_and_list "$port"
+      ;;
+    manualPort)
+      DB_HOST="localhost"
+      DB_PORT="${option_data[$idx]}"
+      setup_own_database
+      ;;
+    demo)
+      setup_demo_database
+      ;;
+    manual)
+      setup_own_database
+      ;;
+  esac
+}
+
+# ─── Prompt for credentials and list databases ─────────────────────────
+
+prompt_credentials_and_list() {
+  local port="$1"
+  local attempts=0
+
+  while [ $attempts -lt 2 ]; do
+    echo ""
+    echo "  Connection to port $port requires authentication."
+    echo ""
+
+    local user pass
+    ask "  Username [postgres]: " user
+    user="${user:-postgres}"
+    ask_secret "  Password: " pass
+
+    if PGPASSWORD="$pass" psql -h localhost -p "$port" -U "$user" -d postgres \
+         -w -c "SELECT 1" >/dev/null 2>&1; then
+      ok "Connected to port $port as '$user'"
+
+      local dbs
+      dbs=$(list_databases "$port" "$user" "$pass")
+      if [ -n "$dbs" ]; then
+        echo ""
+        echo "  Databases on port $port:"
+        local num=1
+        local -a db_arr=()
+        while IFS= read -r db; do
+          echo "    $num) $db"
+          db_arr+=("$db")
+          num=$((num + 1))
+        done <<< "$dbs"
+        echo ""
+
+        local db_choice
+        ask "  Enter a number (or type a database name): " db_choice
+
+        # Check if it's a number
+        if [[ "$db_choice" =~ ^[0-9]+$ ]] \
+             && [ "$db_choice" -ge 1 ] \
+             && [ "$db_choice" -le "${#db_arr[@]}" ]; then
+          DB_NAME="${db_arr[$((db_choice - 1))]}"
+        else
+          DB_NAME="$db_choice"
+        fi
+      else
+        echo ""
+        echo "  No user databases found on port $port."
+        echo ""
+        ask "  Database name: " DB_NAME
+        if [ -z "$DB_NAME" ]; then
+          warn "Database name is required."
+          DB_CONFIGURED=false
+          return
+        fi
+      fi
+
+      DB_HOST="localhost"
+      DB_PORT="$port"
+      DB_USER="$user"
+      DB_PASS="$pass"
+      DB_CONFIGURED=true
+      ok "Using database: $DB_NAME on localhost:$port ($user)"
+      return
+    fi
+
+    warn "Authentication failed."
+    attempts=$((attempts + 1))
+  done
+
+  warn "Could not connect to port $port. Try the manual option."
+  echo ""
+  setup_own_database
+}
+
+# ─── Auto-connect (non-interactive --detect mode) ──────────────────────
+
+connect_existing_auto() {
+  local target_port="${1:-}"
+  local has_psql=false
+  command -v psql &>/dev/null && has_psql=true
+  local matched_target=true
+  [ -n "$target_port" ] && matched_target=false
+
+  for i in "${!DETECTED_PORTS[@]}"; do
+    local port="${DETECTED_PORTS[$i]}"
+    if [ -n "$target_port" ] && [ "$port" != "$target_port" ]; then
+      continue
+    fi
+    [ -n "$target_port" ] && matched_target=true
+
+    if $has_psql && try_passwordless_auth "$port"; then
+      if [ -n "$DB_NAME" ]; then
+        local dbs
+        dbs=$(list_databases "$port" "$AUTH_USER" "")
+        if echo "$dbs" | grep -Fqx -- "$DB_NAME"; then
+          DB_HOST="localhost"; DB_PORT="$port"
+          DB_USER="$AUTH_USER"; DB_PASS=""
+          DB_CONFIGURED=true
+          ok "Using database: $DB_NAME on localhost:$port ($AUTH_USER)"
+          return
+        fi
+        warn "Database '$DB_NAME' not found on port $port"
+        continue
+      fi
+
+      local first_db
+      first_db=$(list_databases "$port" "$AUTH_USER" "" | head -1)
+      if [ -n "$first_db" ]; then
+        DB_HOST="localhost"; DB_PORT="$port"
+        DB_NAME="$first_db"; DB_USER="$AUTH_USER"; DB_PASS=""
+        DB_CONFIGURED=true
+        ok "Auto-detected: $DB_NAME on localhost:$port ($AUTH_USER)"
+        return
+      fi
+    fi
+  done
+
+  echo ""
+  if ! $has_psql; then
+    echo "DETECT_PSQL_MISSING"
+    echo "psql is required for --detect auto-connection."
+  elif ! $matched_target; then
+    echo "DETECT_PORT_NOT_FOUND"
+    echo "No detected PostgreSQL instance on port $target_port."
+  else
+    echo "DETECT_AUTH_FAILED"
+    echo "Could not authenticate to any detected instance."
+  fi
+  echo "Re-run with explicit credentials:"
+  echo "  --own-db --db-host=HOST --db-port=PORT --db-name=DB --db-user=USER --db-pass=PASS"
+  DB_CONFIGURED=false
 }
 
 # ─── Clean up old demo containers ─────────────────────────────────────────
@@ -567,11 +1050,13 @@ setup_own_database() {
   echo "  Enter your PostgreSQL connection details:"
   echo ""
 
-  ask "  Host [localhost]: " DB_HOST
-  DB_HOST="${DB_HOST:-localhost}"
+  local default_host="${DB_HOST:-localhost}"
+  ask "  Host [$default_host]: " DB_HOST
+  DB_HOST="${DB_HOST:-$default_host}"
 
-  ask "  Port [5432]: " DB_PORT
-  DB_PORT="${DB_PORT:-5432}"
+  local default_port="${DB_PORT:-5432}"
+  ask "  Port [$default_port]: " DB_PORT
+  DB_PORT="${DB_PORT:-$default_port}"
 
   ask "  Database name: " DB_NAME
   [ -z "$DB_NAME" ] && { warn "Database name is required."; DB_CONFIGURED=false; return; }
@@ -717,6 +1202,22 @@ configure_claude_desktop() {
 
 # ─── Summary ─────────────────────────────────────────────────────────────────
 
+print_update_summary() {
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "  Update complete!"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo ""
+  echo "  Your existing database configuration is unchanged."
+  echo ""
+  echo "  Claude Code:    start a new conversation to use"
+  echo "                  the updated server"
+  echo "  Claude Desktop: restart the app to pick up the"
+  echo "                  new version"
+  echo ""
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo ""
+}
+
 print_summary() {
   echo ""
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -756,6 +1257,120 @@ print_summary() {
   echo ""
 }
 
+# ─── Stop stale MCP server processes ─────────────────────────────────────────
+
+stop_stale_processes() {
+  local count
+  count=$(pgrep -fc '(^|/)pgedge-postgres-mcp( |$)' 2>/dev/null || true)
+  if [ "$count" -gt 0 ] 2>/dev/null; then
+    info "Stopping $count running MCP server process(es)..."
+    pkill -f '(^|/)pgedge-postgres-mcp( |$)' 2>/dev/null || true
+    sleep 1
+  fi
+}
+
+# ─── Check for existing installation ────────────────────────────────────────
+
+check_existing_install() {
+  local binary="$BIN_DIR/pgedge-postgres-mcp"
+  [ -f "$binary" ] || return 1
+
+  local explicit_reconfigure=false
+  [ -n "$MODE" ] && explicit_reconfigure=true
+
+  local installed_version=""
+  if [ -f "$BIN_DIR/.version" ]; then
+    installed_version=$(cat "$BIN_DIR/.version")
+  fi
+
+  if [ "$installed_version" = "$VERSION" ]; then
+    echo ""
+    ok "pgEdge MCP Server $VERSION is already up to date."
+    echo ""
+    if $explicit_reconfigure; then
+      choose_database
+      if [ "$DB_CONFIGURED" = true ]; then
+        echo ""
+        configure_claude_code
+        configure_claude_desktop
+        print_summary
+      fi
+    elif has_tty; then
+      local reconfigure
+      ask "  Want to reconfigure the database connection? (y/n): " reconfigure
+      reconfigure="${reconfigure:-n}"
+      case "$reconfigure" in
+        [Yy]*)
+          echo ""
+          choose_database
+          if [ "$DB_CONFIGURED" = true ]; then
+            echo ""
+            configure_claude_code
+            configure_claude_desktop
+            print_summary
+          fi
+          ;;
+        *)
+          echo ""
+          info "Nothing to do."
+          echo ""
+          echo "  Claude Code:    start a new conversation"
+          echo "  Claude Desktop: restart the app, then start chatting"
+          echo ""
+          ;;
+      esac
+    else
+      info "Already up to date. Nothing to do."
+    fi
+    exit 0
+  fi
+
+  echo ""
+  info "pgEdge MCP Server ${installed_version:-unknown} is installed."
+  ok "A newer version ($VERSION) is available."
+  echo ""
+  if has_tty; then
+    local update
+    ask "  Update? (y/n): " update
+    update="${update:-y}"
+    case "$update" in
+      [Yy]*)
+        stop_stale_processes
+        download_binary
+        ok "Updated to $VERSION."
+        if ! $explicit_reconfigure; then
+          echo ""
+          print_update_summary
+        fi
+        ;;
+      *)
+        echo ""
+        info "Skipping update. Exiting."
+        exit 0
+        ;;
+    esac
+  else
+    stop_stale_processes
+    download_binary
+    ok "Updated to $VERSION."
+    if ! $explicit_reconfigure; then
+      echo ""
+      print_update_summary
+    fi
+  fi
+
+  if $explicit_reconfigure; then
+    choose_database
+    if [ "$DB_CONFIGURED" = true ]; then
+      echo ""
+      configure_claude_code
+      configure_claude_desktop
+      print_summary
+    fi
+  fi
+  exit 0
+}
+
 # ─── Main ────────────────────────────────────────────────────────────────────
 
 main() {
@@ -773,16 +1388,19 @@ main() {
 
   detect_platform
   get_latest_version
+  check_existing_install || true
   download_binary
 
   echo ""
   choose_database
 
-  echo ""
-  configure_claude_code
-  configure_claude_desktop
+  if [ "$DB_CONFIGURED" = true ]; then
+    echo ""
+    configure_claude_code
+    configure_claude_desktop
 
-  print_summary
+    print_summary
+  fi
 }
 
 main "$@"
