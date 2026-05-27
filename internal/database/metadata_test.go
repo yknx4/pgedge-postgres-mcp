@@ -230,8 +230,9 @@ func TestBuildTableInfo_TableLevelAttributesFromFirstRow(t *testing.T) {
 }
 
 // TestBuildTableInfo_PreservesAllColumnAttributes verifies that
-// constraint flags, identity info, default expressions and FK
-// references are carried over from the scanned row to ColumnInfo.
+// constraint flags, identity info, default expressions, descriptions
+// and FK references are all carried over from the scanned row to
+// ColumnInfo.
 func TestBuildTableInfo_PreservesAllColumnAttributes(t *testing.T) {
 	row := metadataRow{
 		SchemaName:   "public",
@@ -245,29 +246,31 @@ func TestBuildTableInfo_PreservesAllColumnAttributes(t *testing.T) {
 		TypeModifier: sql.NullInt32{Int32: -1, Valid: true},
 		IsPrimaryKey: true,
 		IsUnique:     true,
-		FKReference:  "",
+		FKReference:  "auth.tokens.user_id",
 		IsIndexed:    true,
 		IdentityType: "a",
 		DefaultValue: "nextval('users_id_seq'::regclass)",
 	}
+	want := ColumnInfo{
+		ColumnName:       "id",
+		DataType:         "integer",
+		IsNullable:       "NO",
+		Description:      "primary identifier",
+		IsPrimaryKey:     true,
+		IsUnique:         true,
+		ForeignKeyRef:    "auth.tokens.user_id",
+		IsIndexed:        true,
+		IsIdentity:       "a",
+		DefaultValue:     "nextval('users_id_seq'::regclass)",
+		IsVectorColumn:   false,
+		VectorDimensions: 0,
+	}
 
 	metadata, _, _ := buildTableInfo([]metadataRow{row})
-	col := metadata["public.users"].Columns[0]
+	got := metadata["public.users"].Columns[0]
 
-	if col.ColumnName != "id" || col.DataType != "integer" || col.IsNullable != "NO" {
-		t.Errorf("basic fields not preserved: %+v", col)
-	}
-	if !col.IsPrimaryKey || !col.IsUnique || !col.IsIndexed {
-		t.Errorf("constraint flags not preserved: %+v", col)
-	}
-	if col.IsIdentity != "a" {
-		t.Errorf("expected IsIdentity == 'a', got %q", col.IsIdentity)
-	}
-	if col.DefaultValue != "nextval('users_id_seq'::regclass)" {
-		t.Errorf("default value not preserved, got %q", col.DefaultValue)
-	}
-	if col.Description != "primary identifier" {
-		t.Errorf("description not preserved, got %q", col.Description)
+	if got != want {
+		t.Errorf("column attributes not preserved:\n got:  %+v\n want: %+v", got, want)
 	}
 }
 

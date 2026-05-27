@@ -84,6 +84,59 @@ func scanMetadataRow(rows pgx.Rows) (metadataRow, error) {
 	return r, err
 }
 
+// vectorColumnInfo returns whether the row describes a pgvector column
+// and, if so, the parsed dimension count. A typename of "vector" but a
+// data_type without a parenthesised dimension count yields (true, 0).
+func vectorColumnInfo(r metadataRow) (isVector bool, dimensions int) {
+	if !r.TypeName.Valid || r.TypeName.String != "vector" {
+		return false, 0
+	}
+	matches := vectorDimsRe.FindStringSubmatch(r.DataType.String)
+	if len(matches) < 2 {
+		return true, 0
+	}
+	dim, err := strconv.Atoi(matches[1])
+	if err != nil {
+		return true, 0
+	}
+	return true, dim
+}
+
+// columnInfoFromRow builds a ColumnInfo from a single metadataRow.
+// Callers must check that the row actually carries column data
+// (r.ColumnName.Valid and non-empty) before calling.
+func columnInfoFromRow(r metadataRow) ColumnInfo {
+	isVector, dimensions := vectorColumnInfo(r)
+	return ColumnInfo{
+		ColumnName:       r.ColumnName.String,
+		DataType:         r.DataType.String,
+		IsNullable:       r.IsNullable.String,
+		Description:      r.ColumnDesc,
+		IsPrimaryKey:     r.IsPrimaryKey,
+		IsUnique:         r.IsUnique,
+		ForeignKeyRef:    r.FKReference,
+		IsIndexed:        r.IsIndexed,
+		IsIdentity:       r.IdentityType,
+		DefaultValue:     r.DefaultValue,
+		IsVectorColumn:   isVector,
+		VectorDimensions: dimensions,
+	}
+}
+
+// tableInfoFromRow constructs a fresh TableInfo with table-level
+// attributes from r and an empty Columns slice.
+func tableInfoFromRow(r metadataRow) TableInfo {
+	return TableInfo{
+		SchemaName:    r.SchemaName,
+		TableName:     r.TableName,
+		TableType:     r.TableType,
+		Description:   r.TableDesc,
+		IsPartitioned: r.IsPartitioned,
+		IsPartition:   r.IsPartition,
+		Columns:       []ColumnInfo{},
+	}
+}
+
 // buildTableInfo groups scanned rows by (schema, table) and constructs
 // the metadata map. The returned map is keyed "schema.table". schemas
 // collects the distinct schema names seen. columnCount is the total
@@ -102,43 +155,11 @@ func buildTableInfo(rows []metadataRow) (metadata map[string]TableInfo, schemas 
 
 		table, exists := metadata[key]
 		if !exists {
-			table = TableInfo{
-				SchemaName:    r.SchemaName,
-				TableName:     r.TableName,
-				TableType:     r.TableType,
-				Description:   r.TableDesc,
-				IsPartitioned: r.IsPartitioned,
-				IsPartition:   r.IsPartition,
-				Columns:       []ColumnInfo{},
-			}
+			table = tableInfoFromRow(r)
 		}
 
 		if r.ColumnName.Valid && r.ColumnName.String != "" {
-			isVector := false
-			dimensions := 0
-			if r.TypeName.Valid && r.TypeName.String == "vector" {
-				isVector = true
-				if matches := vectorDimsRe.FindStringSubmatch(r.DataType.String); len(matches) > 1 {
-					if dim, err := strconv.Atoi(matches[1]); err == nil {
-						dimensions = dim
-					}
-				}
-			}
-
-			table.Columns = append(table.Columns, ColumnInfo{
-				ColumnName:       r.ColumnName.String,
-				DataType:         r.DataType.String,
-				IsNullable:       r.IsNullable.String,
-				Description:      r.ColumnDesc,
-				IsPrimaryKey:     r.IsPrimaryKey,
-				IsUnique:         r.IsUnique,
-				ForeignKeyRef:    r.FKReference,
-				IsIndexed:        r.IsIndexed,
-				IsIdentity:       r.IdentityType,
-				DefaultValue:     r.DefaultValue,
-				IsVectorColumn:   isVector,
-				VectorDimensions: dimensions,
-			})
+			table.Columns = append(table.Columns, columnInfoFromRow(r))
 			columnCount++
 		}
 
