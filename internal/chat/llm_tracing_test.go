@@ -82,3 +82,39 @@ func TestNewTracingHTTPClient_PassesThroughOnSuccess(t *testing.T) {
 		t.Errorf("status = %d", resp.StatusCode)
 	}
 }
+
+func TestTracingRoundTripper_NoLogWhenBelowDebug(t *testing.T) {
+	origLevel := embedding.GetLogLevel()
+	embedding.SetLogLevel(embedding.LogLevelInfo)
+	defer embedding.SetLogLevel(origLevel)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+
+	var buf bytes.Buffer
+	rt := &tracingRoundTripper{
+		provider: "anthropic",
+		model:    "claude-x",
+		inner:    http.DefaultTransport,
+		out:      &buf,
+	}
+	client := &http.Client{Transport: rt}
+
+	req, _ := http.NewRequest("POST", server.URL+"/v1/messages", strings.NewReader(`{"hi":1}`))
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("client.Do: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if string(body) != `{"ok":true}` {
+		t.Errorf("body = %q", body)
+	}
+
+	if buf.Len() != 0 {
+		t.Errorf("expected no log output below LogLevelDebug, got %q", buf.String())
+	}
+}

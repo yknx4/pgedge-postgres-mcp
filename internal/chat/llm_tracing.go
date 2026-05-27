@@ -65,11 +65,14 @@ func (t *tracingRoundTripper) RoundTrip(req *http.Request) (*http.Response, erro
 		respBody, readErr := io.ReadAll(resp.Body)
 		_ = resp.Body.Close()
 		if readErr != nil {
-			return nil, fmt.Errorf("tracing: read response body: %w", readErr)
+			fmt.Fprintf(t.out, "[LLM] [TRACE] %s/%s status=%d body-read-error: %v\n",
+				t.provider, t.model, resp.StatusCode, readErr)
+			resp.Body = io.NopCloser(bytes.NewReader(nil))
+		} else {
+			fmt.Fprintf(t.out, "[LLM] [TRACE] %s/%s status=%d body=%s\n",
+				t.provider, t.model, resp.StatusCode, string(respBody))
+			resp.Body = io.NopCloser(bytes.NewReader(respBody))
 		}
-		fmt.Fprintf(t.out, "[LLM] [TRACE] %s/%s status=%d body=%s\n",
-			t.provider, t.model, resp.StatusCode, string(respBody))
-		resp.Body = io.NopCloser(bytes.NewReader(respBody))
 	}
 
 	return resp, nil
