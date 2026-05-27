@@ -25,9 +25,10 @@ import (
 const tracingHTTPTimeout = 120 * time.Second
 
 // tracingRoundTripper wraps an inner http.RoundTripper and logs the
-// request and response bodies to out when the embedding-package log
-// level is Debug or Trace. It is used to recover the request/response
-// trace logging behaviour that the old hand-rolled clients did inline.
+// request and response bodies to out when the chat-package log level
+// is Debug or Trace (see GetLogLevel / SetLogLevel). It recovers the
+// request/response trace logging behaviour the old hand-rolled
+// clients did inline.
 type tracingRoundTripper struct {
 	provider string
 	model    string

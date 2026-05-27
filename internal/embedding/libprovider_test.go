@@ -141,7 +141,9 @@ func TestLibProvider_Dimensions_LazyOnFirstEmbed(t *testing.T) {
 	if p.Dimensions() != 0 {
 		t.Errorf("Dimensions() before Embed = %d, want 0", p.Dimensions())
 	}
-	_, _ = p.Embed(context.Background(), "x")
+	if _, err := p.Embed(context.Background(), "x"); err != nil {
+		t.Fatalf("Embed: %v", err)
+	}
 	if p.Dimensions() != 8 {
 		t.Errorf("Dimensions() after Embed = %d, want 8", p.Dimensions())
 	}

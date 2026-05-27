@@ -109,8 +109,8 @@ func (p *libProvider) Embed(ctx context.Context, text string) ([]float64, error)
 	if err != nil {
 		return nil, err
 	}
-	if d := int32(len(vec)); d > 0 && p.dim.Load() == 0 {
-		p.dim.Store(d)
+	if d := int32(len(vec)); d > 0 {
+		p.dim.CompareAndSwap(0, d)
 	}
 	return vec, nil
 }
