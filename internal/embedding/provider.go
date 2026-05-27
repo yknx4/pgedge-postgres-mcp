@@ -47,8 +47,9 @@ type Config struct {
 	OllamaURL string
 }
 
-// NewProvider creates a new embedding provider based on configuration
-func NewProvider(cfg Config) (Provider, error) {
+// newProviderOLD creates a new embedding provider based on configuration.
+// Deprecated: replaced by NewProvider in libprovider.go; deleted in Task 3.
+func newProviderOLD(cfg Config) (Provider, error) {
 	switch cfg.Provider {
 	case "voyage":
 		if cfg.VoyageAPIKey == "" {
