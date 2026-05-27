@@ -11,6 +11,15 @@ and this project adheres to
 
 ### Changed
 
+- Refactored `Client.LoadMetadataFor` in
+  `internal/database/connection.go`. The CTE-based metadata query
+  now lives in `internal/database/load_metadata.sql` and is loaded
+  via `//go:embed`; the per-row scan and the grouping/transform
+  logic are split into `scanMetadataRow` and `buildTableInfo` in
+  `internal/database/metadata.go`. `buildTableInfo` is pure and is
+  covered by table-driven unit tests that do not require a live
+  database. No behavior change. (#153)
+
 - The KB Builder (formerly `cmd/kb-builder` and the
   `internal/kb*` packages) has moved to a standalone project at
   [`pgedge-ai-kb`](https://github.com/pgEdge/pgedge-ai-kb). The
