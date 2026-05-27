@@ -53,6 +53,19 @@ and this project adheres to
   `pgedge-nla-kb-builder_*` release archives are no longer published
   from this repository.
 
+- The LLM HTTP proxy is now provided by `pgedge-go-llm-lib`'s
+  `llm/proxy` package, mounted at `/api/llm/`. The endpoints moved
+  from `/api/llm/{providers,models,chat}` to `/api/llm/v1/*`, and
+  the request/response wire format now uses typed content blocks
+  (see the library's `llm.ChatRequest` and `llm.ContentBlock`).
+  `internal/llmproxy/` is deleted; tracing plumbs through proxy
+  hooks via the new `internal/llmtracing` package.
+
+- A streaming chat endpoint `/api/llm/v1/chat/stream` (SSE) is now
+  exposed alongside the non-streaming endpoint. The web client
+  continues to use the non-streaming endpoint; streaming UI follows
+  in a later change.
+
 ### Fixed
 
 - Metadata loader now tolerates tables with zero columns
