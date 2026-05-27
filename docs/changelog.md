@@ -38,6 +38,13 @@ and this project adheres to
   call. The method now returns all databases, matching the behavior
   of `CanAccessDatabase`. (#117)
 
+- Added a JSON-RPC `ping` handler on both stdio and HTTP transports
+  so MCP clients that issue `ping` during initialization or health
+  checks receive a compliant `{}` result instead of a
+  `-32601 Method not found` error. The stdio handler suppresses
+  responses to notification-style pings (no `id`) per JSON-RPC
+  2.0 §4.1. (#167)
+
 ### Added
 
 - The installer detects running Postgres instances and offers
@@ -57,6 +64,14 @@ and this project adheres to
   results when tables were created outside the MCP server or
   when using read-only database connections.
 
+- HTTP authentication is now configurable in Docker deployments
+  via the `PGEDGE_AUTH_ENABLED` environment variable. Auth remains
+  enabled by default; set `PGEDGE_AUTH_ENABLED=false` only in
+  trusted local development environments (for example, when
+  connecting Claude through `mcp-remote` with a fixed bearer
+  token and needing access to multiple databases). The setting is
+  honored by both the single-database and multi-database
+  initialization paths. (#167)
 ### Fixed
 
 - Fixed port detection on Windows; the installer now reliably

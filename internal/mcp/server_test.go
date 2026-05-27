@@ -12,9 +12,37 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
+	"os"
 	"testing"
 )
+
+// captureStdout runs fn while os.Stdout is redirected to an in-memory
+// pipe, and returns whatever fn wrote. Used to test stdio handlers,
+// which write JSON-RPC responses directly to os.Stdout.
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	old := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe failed: %v", err)
+	}
+	os.Stdout = w
+	defer func() { os.Stdout = old }()
+
+	fn()
+
+	if err := w.Close(); err != nil {
+		t.Fatalf("close write end failed: %v", err)
+	}
+	out, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("read pipe failed: %v", err)
+	}
+	return string(out)
+}
 
 // Mock implementations for testing
 
@@ -430,5 +458,46 @@ func TestMockDatabaseProvider(t *testing.T) {
 	err = provider.SelectDatabase(context.Background(), "invalid")
 	if err == nil {
 		t.Error("expected error")
+	}
+}
+
+func TestHandlePing_Stdio_WithID(t *testing.T) {
+	server := NewServer(&mockToolProvider{})
+	req := JSONRPCRequest{JSONRPC: "2.0", ID: float64(1), Method: "ping"}
+
+	out := captureStdout(t, func() {
+		server.handlePing(req)
+	})
+
+	if out == "" {
+		t.Fatal("expected a JSON-RPC response on stdout, got nothing")
+	}
+
+	var resp JSONRPCResponse
+	if err := json.Unmarshal([]byte(out), &resp); err != nil {
+		t.Fatalf("failed to decode response %q: %v", out, err)
+	}
+	if resp.Error != nil {
+		t.Fatalf("unexpected error in response: %v", resp.Error)
+	}
+	result, ok := resp.Result.(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected map result, got %T", resp.Result)
+	}
+	if len(result) != 0 {
+		t.Errorf("expected empty object result, got %v", result)
+	}
+}
+
+func TestHandlePing_Stdio_NilIDIsNotification(t *testing.T) {
+	server := NewServer(&mockToolProvider{})
+	req := JSONRPCRequest{JSONRPC: "2.0", ID: nil, Method: "ping"}
+
+	out := captureStdout(t, func() {
+		server.handlePing(req)
+	})
+
+	if out != "" {
+		t.Errorf("notification ping must produce no response, got %q", out)
 	}
 }
