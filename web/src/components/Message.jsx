@@ -300,8 +300,35 @@ const Message = React.memo(({ message, showActivity, renderMarkdown, debug }) =>
                         >
                             {message.content}
                         </Typography>
-                    ) : message.isThinking ? (
+                    ) : message.isThinking && !message.content ? (
                         <ThinkingIndicator isThinking={true} />
+                    ) : message.isThinking && message.content ? (
+                        // Streaming in progress: render the partial
+                        // text and keep the thinking indicator below
+                        // so the user sees progress is ongoing.
+                        <>
+                            {renderMarkdown ? (
+                                <ReactMarkdown
+                                    remarkPlugins={[remarkGfm]}
+                                    components={markdownComponents}
+                                >
+                                    {message.content}
+                                </ReactMarkdown>
+                            ) : (
+                                <Typography
+                                    variant="body1"
+                                    sx={{
+                                        whiteSpace: 'pre-wrap',
+                                        wordBreak: 'break-word',
+                                    }}
+                                >
+                                    {message.content}
+                                </Typography>
+                            )}
+                            <Box sx={{ mt: 1 }}>
+                                <ThinkingIndicator isThinking={true} />
+                            </Box>
+                        </>
                     ) : renderMarkdown ? (
                         <ReactMarkdown
                             remarkPlugins={[remarkGfm]}

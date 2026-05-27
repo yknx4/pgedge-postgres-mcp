@@ -1,0 +1,268 @@
+/*-------------------------------------------------------------------------
+ *
+ * pgEdge MCP Client - SSE Chat Streaming Helper
+ *
+ * Copyright (c) 2025 - 2026, pgEdge, Inc.
+ * This software is released under The PostgreSQL License
+ *
+ *-------------------------------------------------------------------------
+ */
+
+/**
+ * Posts to the library proxy's streaming chat endpoint
+ * (/api/llm/v1/chat/stream), parses Server-Sent Events, and assembles
+ * the final response into the same shape returned by the non-streaming
+ * /v1/chat endpoint: { content, stop_reason, usage }.
+ *
+ * SSE frames are separated by blank lines (\n\n). Each frame may
+ * contain an `event:` line and one or more `data:` lines (which are
+ * joined with \n). The default event type when none is specified is
+ * "message". Special event types handled here:
+ *
+ *   - "done"  -> finalises the assembled response (carries stop_reason
+ *                and usage).
+ *   - "error" -> aborts the stream and rejects the returned promise.
+ *
+ * Chunk types within "message" events:
+ *
+ *   - "text"            -> appended to the current text block; also
+ *                          surfaced via the onTextChunk callback so the
+ *                          UI can update incrementally.
+ *   - "tool_use_start"  -> begins a new tool_use block (id + name).
+ *   - "tool_use_delta"  -> accumulates partial JSON input string for
+ *                          the current tool_use; parsed at done.
+ *
+ * @param {object} body - Request body matching the /v1/chat schema
+ *     (messages, tools, provider, model, etc.).
+ * @param {object} [options] - Optional knobs.
+ * @param {AbortSignal} [options.signal] - Abort signal forwarded to
+ *     fetch.
+ * @param {string} [options.sessionToken] - Bearer token used for the
+ *     Authorization header.
+ * @param {Function} [options.onTextChunk] - Called with each text
+ *     fragment (string) as it arrives, suitable for incremental UI
+ *     updates.
+ * @returns {Promise<object>} Resolves with the assembled
+ *     { content, stop_reason, usage } response.
+ */
+export async function sseChat(body, options = {}) {
+    const { signal, sessionToken, onTextChunk } = options;
+
+    const headers = {
+        'Content-Type': 'application/json',
+        'Accept': 'text/event-stream',
+    };
+    if (sessionToken) {
+        headers['Authorization'] = `Bearer ${sessionToken}`;
+    }
+
+    const response = await fetch('/api/llm/v1/chat/stream', {
+        method: 'POST',
+        headers,
+        credentials: 'include',
+        signal,
+        body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+        const text = await response.text();
+        const err = new Error(`HTTP ${response.status}: ${text}`);
+        err.status = response.status;
+        err.body = text;
+        throw err;
+    }
+
+    if (!response.body || typeof response.body.getReader !== 'function') {
+        throw new Error('Streaming response body is not readable');
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    // Assembly state mirrors the non-streaming endpoint's response.
+    const assembled = {
+        content: [],
+        stop_reason: 'end_turn',
+        usage: null,
+    };
+    let pendingTextBlock = null;
+    // Ordered list of tool_use ids so we preserve emission order at done.
+    const toolOrder = [];
+    // Map of tool_use id -> { name, partial } accumulator.
+    const pendingTools = new Map();
+    let currentToolId = null;
+    let streamError = null;
+
+    const flushPendingText = () => {
+        if (pendingTextBlock) {
+            assembled.content.push(pendingTextBlock);
+            pendingTextBlock = null;
+        }
+    };
+
+    const finalise = () => {
+        flushPendingText();
+        for (const id of toolOrder) {
+            const info = pendingTools.get(id);
+            if (!info) continue;
+            let input = {};
+            const partial = info.partial || '';
+            if (partial.trim().length > 0) {
+                try {
+                    input = JSON.parse(partial);
+                } catch (_err) {
+                    // Leave input as the raw partial string so the
+                    // caller can still inspect what was attempted.
+                    input = { _raw: partial };
+                }
+            }
+            assembled.content.push({
+                type: 'tool_use',
+                tool_use: { id, name: info.name, input },
+            });
+        }
+    };
+
+    const handleEvent = (eventType, dataLines) => {
+        if (dataLines.length === 0) return;
+        const dataStr = dataLines.join('\n');
+        let parsed;
+        try {
+            parsed = JSON.parse(dataStr);
+        } catch (_err) {
+            // Ignore malformed payloads; the server may emit comments
+            // or heartbeats we don't recognise.
+            return;
+        }
+
+        if (eventType === 'done') {
+            if (parsed.stop_reason) {
+                assembled.stop_reason = parsed.stop_reason;
+            }
+            if (parsed.usage) {
+                assembled.usage = parsed.usage;
+            }
+            // If the done payload also carries assembled content
+            // blocks, prefer the server's view.
+            if (Array.isArray(parsed.content) && parsed.content.length > 0) {
+                assembled.content = parsed.content;
+                // Don't run finalise() in this case; the server already
+                // provided the assembled shape.
+                pendingTextBlock = null;
+                pendingTools.clear();
+                toolOrder.length = 0;
+            } else {
+                finalise();
+            }
+            return;
+        }
+
+        if (eventType === 'error') {
+            const msg = parsed.error || parsed.message || 'stream error';
+            streamError = new Error(msg);
+            return;
+        }
+
+        // Default "message" events carry chunk payloads.
+        switch (parsed.type) {
+            case 'text': {
+                if (!pendingTextBlock) {
+                    pendingTextBlock = { type: 'text', text: '' };
+                }
+                const chunk = parsed.text || '';
+                pendingTextBlock.text += chunk;
+                if (chunk && typeof onTextChunk === 'function') {
+                    try {
+                        onTextChunk(chunk);
+                    } catch (_err) {
+                        // Don't let UI callbacks abort the stream.
+                    }
+                }
+                break;
+            }
+            case 'tool_use_start': {
+                // Flush any pending text so the assembled content
+                // preserves the relative ordering of blocks.
+                flushPendingText();
+                const tu = parsed.tool_use || {};
+                const id = tu.id || `tu_${pendingTools.size}`;
+                currentToolId = id;
+                if (!pendingTools.has(id)) {
+                    toolOrder.push(id);
+                }
+                pendingTools.set(id, {
+                    name: tu.name || '',
+                    partial: '',
+                });
+                break;
+            }
+            case 'tool_use_delta': {
+                const id = parsed.id || currentToolId;
+                if (id && pendingTools.has(id)) {
+                    const info = pendingTools.get(id);
+                    info.partial += parsed.partial || '';
+                }
+                break;
+            }
+            default:
+                // Other chunk types (image, etc.) ignored for now.
+                break;
+        }
+    };
+
+    const processFrame = (frame) => {
+        let eventType = 'message';
+        const dataLines = [];
+        for (const rawLine of frame.split('\n')) {
+            const line = rawLine.replace(/\r$/, '');
+            if (line.length === 0) continue;
+            if (line.startsWith(':')) continue; // SSE comment
+            if (line.startsWith('event:')) {
+                eventType = line.slice(6).trim();
+            } else if (line.startsWith('data:')) {
+                // Per SSE spec, strip a single leading space if present.
+                let payload = line.slice(5);
+                if (payload.startsWith(' ')) payload = payload.slice(1);
+                dataLines.push(payload);
+            }
+            // Other fields (id:, retry:) are ignored.
+        }
+        handleEvent(eventType, dataLines);
+    };
+
+    try {
+        while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            let idx;
+            while ((idx = buffer.indexOf('\n\n')) !== -1) {
+                const frame = buffer.slice(0, idx);
+                buffer = buffer.slice(idx + 2);
+                processFrame(frame);
+                if (streamError) break;
+            }
+            if (streamError) break;
+        }
+        // Flush any trailing data that wasn't terminated by \n\n.
+        if (!streamError && buffer.trim().length > 0) {
+            processFrame(buffer);
+            buffer = '';
+        }
+    } finally {
+        try {
+            reader.releaseLock();
+        } catch (_err) {
+            // ignore
+        }
+    }
+
+    if (streamError) {
+        throw streamError;
+    }
+
+    return assembled;
+}
+
+export default sseChat;
