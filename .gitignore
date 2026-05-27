@@ -42,6 +42,8 @@ Thumbs.db
 
 # AI
 .claude/settings.local.json
+.claude/plans/
+.claude/specs/
 
 # Docs
 site/
