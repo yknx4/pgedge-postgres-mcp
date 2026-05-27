@@ -27,6 +27,19 @@ and this project adheres to
   `o3-*`) are now supported transparently; the library routes them
   to `/v1/responses` automatically based on the model name.
 
+- Embedding provider clients (Voyage, OpenAI, Ollama) now use the
+  shared
+  [`pgedge-go-llm-lib`](https://github.com/pgEdge/pgedge-go-llm-lib)
+  library instead of hand-rolled HTTP wire code. Approximately 1100
+  lines of provider-specific code are removed from
+  `internal/embedding/`. The `Provider` interface and `NewProvider`
+  factory are preserved; tool consumers (search_knowledgebase,
+  generate_embedding, similarity_search) compile unchanged.
+
+- `Provider.Dimensions()` is now lazily populated from the first
+  successful `Embed` call; it returns 0 before any embedding has been
+  generated (previously the value was hard-coded per known model).
+
 - The KB Builder (formerly `cmd/kb-builder` and the
   `internal/kb*` packages) has moved to a standalone project at
   [`pgedge-ai-kb`](https://github.com/pgEdge/pgedge-ai-kb). The
