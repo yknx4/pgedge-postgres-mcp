@@ -73,13 +73,17 @@ PGEDGE_DB_SSLMODE=prefer
     details.
 
 !!! tip "Local-only Claude `mcp-remote` and multi-database switching"
-    If you are running locally and connecting Claude via a fixed bearer token
-    header, API-token access may be constrained to a single database context.
-    For trusted local development only, you can disable HTTP authentication:
+    API tokens are scoped to a single database, so when an HTTP client (such
+    as Claude via `mcp-remote`) sends a fixed bearer token on every request,
+    it cannot switch between configured databases. For trusted local
+    development only, you can disable HTTP authentication so that the server
+    falls back to its default database selection and the client can switch
+    databases freely:
     ```bash
     PGEDGE_AUTH_ENABLED=false
     ```
-    Do **not** disable authentication in shared or production environments.
+    This setting only affects HTTP mode; `stdio` has no auth layer. Do
+    **not** disable authentication in shared or production environments.
 
 Specify the name of your embedding provider in the `EMBEDDING PROVIDER CONFIGURATION` section:
 
