@@ -16,6 +16,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -570,6 +571,14 @@ func TestRunStdio_NullIDIsRequest_UnknownMethod(t *testing.T) {
 		t.Fatal("expected a -32601 response for a request with null id, got nothing")
 	}
 
+	// Per JSON-RPC 2.0 §5.1 the response object MUST include the id
+	// member; for a request with explicit "id": null the response id
+	// is also null. Verify on the raw bytes because Decode into
+	// JSONRPCResponse cannot distinguish absent id from id: null.
+	if !strings.Contains(out, `"id":null`) {
+		t.Errorf("expected response to include `\"id\":null`, got %q", out)
+	}
+
 	var resp JSONRPCResponse
 	if err := json.Unmarshal([]byte(out), &resp); err != nil {
 		t.Fatalf("failed to decode response %q: %v", out, err)
@@ -590,6 +599,10 @@ func TestRunStdio_NullIDIsRequest_Ping(t *testing.T) {
 	out := runStdio(t, server, input)
 	if out == "" {
 		t.Fatal("expected a ping response for a request with null id, got nothing")
+	}
+
+	if !strings.Contains(out, `"id":null`) {
+		t.Errorf("expected response to include `\"id\":null`, got %q", out)
 	}
 
 	var resp JSONRPCResponse
