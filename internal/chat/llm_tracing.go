@@ -16,8 +16,6 @@ import (
 	"net/http"
 	"os"
 	"time"
-
-	"pgedge-postgres-mcp/internal/embedding"
 )
 
 // tracingHTTPTimeout caps the wall-clock time of a single upstream LLM
@@ -43,7 +41,7 @@ type tracingRoundTripper struct {
 // Bodies are read into memory; this is fine for chat traffic (a few KB
 // to a few hundred KB), the same trade-off the old code made.
 func (t *tracingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	if embedding.GetLogLevel() < embedding.LogLevelDebug {
+	if GetLogLevel() < LogLevelDebug {
 		return t.inner.RoundTrip(req)
 	}
 
