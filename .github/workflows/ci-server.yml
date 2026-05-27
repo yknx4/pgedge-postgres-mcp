@@ -45,9 +45,9 @@ jobs:
                   path: |
                       ~/go/pkg/mod
                       ~/.cache/go-build
-                  key: ${{ runner.os }}-go-1.25-${{ hashFiles('**/go.sum') }}
+                  key: ${{ runner.os }}-go-1.26-${{ hashFiles('**/go.sum') }}
                   restore-keys: |
-                      ${{ runner.os }}-go-1.25-
+                      ${{ runner.os }}-go-1.26-
 
             - name: Verify dependencies
               run: go mod verify

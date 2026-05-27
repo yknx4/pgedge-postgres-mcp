@@ -15,9 +15,16 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"time"
 
 	"pgedge-postgres-mcp/internal/embedding"
 )
+
+// tracingHTTPTimeout caps the wall-clock time of a single upstream LLM
+// request through the tracing http.Client. Long enough for slow models
+// to finish but short enough that a hung connection eventually fails
+// rather than blocking the CLI forever.
+const tracingHTTPTimeout = 120 * time.Second
 
 // tracingRoundTripper wraps an inner http.RoundTripper and logs the
 // request and response bodies to out when the embedding-package log
@@ -84,6 +91,7 @@ func (t *tracingRoundTripper) RoundTrip(req *http.Request) (*http.Response, erro
 // upstream traffic should be traced (typically the CLI in debug mode).
 func newTracingHTTPClient(provider, model string) *http.Client {
 	return &http.Client{
+		Timeout: tracingHTTPTimeout,
 		Transport: &tracingRoundTripper{
 			provider: provider,
 			model:    model,

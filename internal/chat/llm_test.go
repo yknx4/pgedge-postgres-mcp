@@ -48,7 +48,7 @@ func TestLibClient_Chat_RoundTrip(t *testing.T) {
 		t.Fatalf("Chat: %v", err)
 	}
 
-	if string(gotReqBody) == "" {
+	if len(gotReqBody) == 0 {
 		t.Fatal("server received no request body")
 	}
 	if len(resp.Content) != 1 {
