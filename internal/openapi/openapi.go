@@ -132,9 +132,11 @@ func buildPaths() M {
 		"/api/databases/select":   buildDatabasesSelectPath(),
 		"/api/user/info":          buildUserInfoPath(),
 		"/api/chat/compact":       buildChatCompactPath(),
-		"/api/llm/providers":      buildLLMProvidersPath(),
-		"/api/llm/models":         buildLLMModelsPath(),
-		"/api/llm/chat":           buildLLMChatPath(),
+		"/api/llm/v1/providers":   buildLLMProvidersPath(),
+		"/api/llm/v1/models":      buildLLMModelsPath(),
+		"/api/llm/v1/chat":        buildLLMChatPath(),
+		"/api/llm/v1/chat/stream": buildLLMChatStreamPath(),
+		"/api/llm/v1/health":      buildLLMHealthPath(),
 		"/api/conversations":      buildConversationsPath(),
 		"/api/conversations/{id}": buildConversationByIDPath(),
 		"/api/openapi.json":       buildOpenAPISpecPath(),
@@ -339,6 +341,43 @@ func buildLLMChatPath() M {
 					"description": "LLM chat completion response.",
 					"content":     jsonContent(ref("LLMChatResponse")),
 				},
+			}),
+		},
+	}
+}
+
+func buildLLMChatStreamPath() M {
+	return M{
+		"post": M{
+			"tags":        A{"LLM Proxy"},
+			"summary":     "Streaming chat (SSE) via the LLM proxy",
+			"description": "Returns Server-Sent Events conforming to pgedge-go-llm-lib's SSE wire format. See https://github.com/pgEdge/pgedge-go-llm-lib for the full chunk/event schema.",
+			"operationId": "llmChatStream",
+			"security":    bearerSecurity(),
+			"requestBody": M{
+				"required": true,
+				"content":  jsonContent(ref("LLMChatRequest")),
+			},
+			"responses": mergeResponses(M{
+				"200": M{
+					"description": "SSE stream of chat chunks. Each data line is a JSON-encoded llm.StreamChunk; a terminator 'event: done' or 'event: error' precedes connection close.",
+					"content":     M{"text/event-stream": M{}},
+				},
+			}),
+		},
+	}
+}
+
+func buildLLMHealthPath() M {
+	return M{
+		"get": M{
+			"tags":        A{"LLM Proxy"},
+			"summary":     "Check provider connectivity",
+			"operationId": "llmHealth",
+			"security":    bearerSecurity(),
+			"responses": mergeResponses(M{
+				"200": M{"description": "All providers healthy"},
+				"503": M{"description": "One or more providers unhealthy"},
 			}),
 		},
 	}
@@ -563,6 +602,10 @@ func buildSchemas() M {
 		"ModelsResponse":            schemaModelsResponse(),
 		"LLMChatRequest":            schemaLLMChatRequest(),
 		"LLMChatResponse":           schemaLLMChatResponse(),
+		"LLMMessage":                schemaLLMMessage(),
+		"LLMContentBlock":           schemaLLMContentBlock(),
+		"LLMTool":                   schemaLLMTool(),
+		"LLMTokenUsage":             schemaLLMTokenUsage(),
 		"ConversationSummary":       schemaConversationSummary(),
 		"Conversation":              schemaConversation(),
 		"CreateConversationRequest": schemaCreateConversationRequest(),
@@ -983,16 +1026,16 @@ func schemaProviderInfo() M {
 				"type":        "string",
 				"description": "The provider identifier.",
 			},
-			"display": M{
+			"model": M{
 				"type":        "string",
-				"description": "A human-readable display name for the provider.",
+				"description": "The default model for this provider.",
 			},
-			"isDefault": M{
+			"default": M{
 				"type":        "boolean",
 				"description": "Whether this provider is the default.",
 			},
 		},
-		"required": A{"name", "display", "isDefault"},
+		"required": A{"name"},
 	}
 }
 
@@ -1006,12 +1049,12 @@ func schemaProvidersResponse() M {
 				"description": "The available LLM providers.",
 				"items":       ref("ProviderInfo"),
 			},
-			"defaultModel": M{
+			"default_provider": M{
 				"type":        "string",
-				"description": "The name of the default model.",
+				"description": "The name of the default provider.",
 			},
 		},
-		"required": A{"providers", "defaultModel"},
+		"required": A{"providers"},
 	}
 }
 
@@ -1040,8 +1083,8 @@ func schemaModelsResponse() M {
 		"properties": M{
 			"models": M{
 				"type":        "array",
-				"description": "The available models.",
-				"items":       ref("ModelInfo"),
+				"description": "The available model identifiers.",
+				"items":       M{"type": "string"},
 			},
 		},
 		"required": A{"models"},
@@ -1050,88 +1093,89 @@ func schemaModelsResponse() M {
 
 func schemaLLMChatRequest() M {
 	return M{
-		"type":        "object",
-		"description": "Request to send a chat completion to an LLM provider.",
+		"type":     "object",
+		"required": A{"messages"},
 		"properties": M{
 			"messages": M{
-				"type":        "array",
-				"description": "The conversation messages to send.",
-				"items":       ref("ChatMessage"),
+				"type":  "array",
+				"items": ref("LLMMessage"),
 			},
-			"tools": M{
-				"type":        "array",
-				"description": "Optional tool definitions for function calling.",
-				"items": M{
-					"type":        "object",
-					"description": "A tool definition.",
-					"properties": M{
-						"name": M{
-							"type":        "string",
-							"description": "The tool name.",
-						},
-						"description": M{
-							"type":        "string",
-							"description": "A description of what the tool does.",
-						},
-						"inputSchema": M{
-							"type":        "object",
-							"description": "JSON Schema describing the tool's input parameters.",
-						},
-					},
-					"required": A{"name", "description", "inputSchema"},
-				},
-			},
-			"provider": M{
-				"type":        "string",
-				"description": "The LLM provider to use.",
-			},
-			"model": M{
-				"type":        "string",
-				"description": "The model to use for completion.",
-			},
-			"debug": M{
-				"type":        "boolean",
-				"description": "Whether to include debug information in the response.",
-				"default":     false,
-			},
+			"tools":          M{"type": "array", "items": ref("LLMTool")},
+			"system_prompt":  M{"type": "string"},
+			"max_tokens":     M{"type": "integer"},
+			"temperature":    M{"type": "number"},
+			"provider":       M{"type": "string", "description": "Override default provider"},
+			"model":          M{"type": "string", "description": "Override default model"},
+			"stop_sequences": M{"type": "array", "items": M{"type": "string"}},
 		},
-		"required": A{"messages", "provider", "model"},
 	}
 }
 
 func schemaLLMChatResponse() M {
 	return M{
-		"type":        "object",
-		"description": "Response from an LLM chat completion request.",
+		"type":     "object",
+		"required": A{"content", "stop_reason"},
 		"properties": M{
-			"content": M{
-				"type":        "array",
-				"description": "The response content blocks.",
-				"items": M{
-					"type":        "object",
-					"description": "A content block from the LLM response.",
-				},
-			},
-			"stop_reason": M{
-				"type":        "string",
-				"description": "The reason the model stopped generating.",
-			},
-			"token_usage": M{
-				"type":        "object",
-				"description": "Token usage statistics for the request.",
-				"properties": M{
-					"input_tokens": M{
-						"type":        "integer",
-						"description": "Number of input tokens consumed.",
-					},
-					"output_tokens": M{
-						"type":        "integer",
-						"description": "Number of output tokens generated.",
-					},
-				},
-			},
+			"content":     M{"type": "array", "items": ref("LLMContentBlock")},
+			"stop_reason": M{"type": "string", "enum": A{"end_turn", "max_tokens", "stop_sequence", "tool_use", "content_filter", "error"}},
+			"usage":       ref("LLMTokenUsage"),
 		},
-		"required": A{"content", "stop_reason", "token_usage"},
+	}
+}
+
+func schemaLLMMessage() M {
+	return M{
+		"type":     "object",
+		"required": A{"role", "content"},
+		"properties": M{
+			"role":    M{"type": "string", "enum": A{"user", "assistant", "system", "tool"}},
+			"content": M{"type": "array", "items": ref("LLMContentBlock")},
+		},
+	}
+}
+
+func schemaLLMContentBlock() M {
+	return M{
+		"type":     "object",
+		"required": A{"type"},
+		"properties": M{
+			"type": M{"type": "string", "enum": A{"text", "image", "document", "tool_use", "tool_result"}},
+			"text": M{"type": "string"},
+			"tool_use": M{
+				"type":        "object",
+				"description": "Populated when type=tool_use",
+				"properties": M{
+					"id":    M{"type": "string"},
+					"name":  M{"type": "string"},
+					"input": M{"type": "object"},
+				},
+			},
+			"tool_use_id": M{"type": "string", "description": "Populated when type=tool_result"},
+			"is_error":    M{"type": "boolean", "description": "Populated when type=tool_result"},
+		},
+	}
+}
+
+func schemaLLMTool() M {
+	return M{
+		"type":     "object",
+		"required": A{"name", "description", "input_schema"},
+		"properties": M{
+			"name":         M{"type": "string"},
+			"description":  M{"type": "string"},
+			"input_schema": M{"type": "object"},
+		},
+	}
+}
+
+func schemaLLMTokenUsage() M {
+	return M{
+		"type": "object",
+		"properties": M{
+			"prompt_tokens":     M{"type": "integer"},
+			"completion_tokens": M{"type": "integer"},
+			"total_tokens":      M{"type": "integer"},
+		},
 	}
 }
 
