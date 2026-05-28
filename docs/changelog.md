@@ -18,6 +18,15 @@ and this project adheres to
   lines of provider-specific code are removed from `internal/chat/`.
   Behaviour is preserved; the `LLMClient` interface is unchanged.
 
+- Anthropic prompt caching now covers both the tools block and the
+  system prompt (the library exposes a `WithSystemCaching` builder
+  alongside `WithToolCaching`). Long system prompts no longer pay
+  full input-token cost on every turn.
+
+- OpenAI models that require the Responses API (`gpt-5-*`, `o1-*`,
+  `o3-*`) are now supported transparently; the library routes them
+  to `/v1/responses` automatically based on the model name.
+
 - The KB Builder (formerly `cmd/kb-builder` and the
   `internal/kb*` packages) has moved to a standalone project at
   [`pgedge-ai-kb`](https://github.com/pgEdge/pgedge-ai-kb). The
@@ -97,23 +106,6 @@ and this project adheres to
 
 - Fixed port detection on Windows; the installer now reliably
   detects Postgres instances on all network addresses.
-
-### Known Issues
-
-- The Anthropic system prompt is no longer cached at the provider
-  level pending upstream support (see
-  [pgedge-go-llm-lib#13][llmlib-13]). Tool definitions are still
-  cached, so the impact is limited to the system prompt's
-  contribution to input tokens. Monitor `CacheReadInputTokens` in
-  `[LLM] [DEBUG]` output if cost matters.
-
-- OpenAI models that require the Responses API (gpt-5-*, o1-*, and
-  o3-*) are not yet supported; configuring one will produce a
-  runtime error at chat time (see
-  [pgedge-go-llm-lib#12][llmlib-12]).
-
-[llmlib-12]: https://github.com/pgEdge/pgedge-go-llm-lib/issues/12
-[llmlib-13]: https://github.com/pgEdge/pgedge-go-llm-lib/issues/13
 
 ## [1.0.0] - 2026-03-27
 

@@ -98,6 +98,42 @@ func TestLibClient_Chat_InjectsSystemPrompt(t *testing.T) {
 	}
 }
 
+func TestLibClient_Chat_AppliesSystemCachingForAnthropic(t *testing.T) {
+	var gotReq struct {
+		System []struct {
+			Type         string `json:"type"`
+			Text         string `json:"text"`
+			CacheControl *struct {
+				Type string `json:"type"`
+			} `json:"cache_control,omitempty"`
+		} `json:"system"`
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&gotReq)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"m","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`))
+	}))
+	defer server.Close()
+
+	client, err := NewAnthropicClient("test-key", server.URL, "claude-x", 4096, 0.7, false)
+	if err != nil {
+		t.Fatalf("NewAnthropicClient: %v", err)
+	}
+	_, _ = client.Chat(context.Background(),
+		[]Message{{Role: "user", Content: "hi"}}, nil)
+
+	if len(gotReq.System) == 0 {
+		t.Fatal("expected at least one system block")
+	}
+	last := gotReq.System[len(gotReq.System)-1]
+	if last.CacheControl == nil {
+		t.Fatalf("expected cache_control on the last system block; got %+v", last)
+	}
+	if last.CacheControl.Type != "ephemeral" {
+		t.Errorf("cache_control.type = %q, want ephemeral", last.CacheControl.Type)
+	}
+}
+
 func TestLibClient_Chat_AppendsReadOnlyPromptWhenSet(t *testing.T) {
 	var gotReq struct {
 		System []struct {

@@ -130,8 +130,11 @@ func (c *libClient) Chat(ctx context.Context, messages []Message, tools interfac
 		Tools:        libTools,
 		SystemPrompt: c.systemPrompt(),
 	}
-	if c.provider == "anthropic" && len(libTools) > 0 {
-		req = anthropic.WithToolCaching(req)
+	if c.provider == "anthropic" {
+		req = anthropic.WithSystemCaching(req)
+		if len(libTools) > 0 {
+			req = anthropic.WithToolCaching(req)
+		}
 	}
 
 	resp, err := c.inner.Chat(ctx, req)
