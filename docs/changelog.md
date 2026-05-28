@@ -79,6 +79,22 @@ and this project adheres to
   `embedding.NewProvider` wrapper. The `internal/embedding/`
   package is deleted entirely.
 
+- The CLI chat client now uses `pgedge-go-llm-lib`'s `llm.Client`
+  directly instead of the temporary `chat.LLMClient` wrapper
+  introduced in the first migration PR. The wrapper layer
+  (`internal/chat/llm.go` and `internal/chat/llm_translate.go`) is
+  deleted; messages and content blocks flow through the chat
+  package as `llm.Message` and `llm.ContentBlock` rather than
+  chat-package wrapper types. The CLI's debug-mode HTTP tracing
+  still injects via `llm.Options.HTTPClient`.
+
+- Saved conversations from earlier versions are migrated on load:
+  messages with a plain-string `content` field are wrapped as a
+  single text content block, and tool-result messages saved with
+  role `"user"` are promoted to role `"tool"` to match the
+  library's expected shape. The on-disk JSON written by this and
+  later versions uses the typed content-block format directly.
+
 ### Fixed
 
 - Metadata loader now tolerates tables with zero columns
