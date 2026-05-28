@@ -517,10 +517,24 @@ func TestEstimateTotalTokensWithToolContent(t *testing.T) {
 		},
 	}
 
+	// Baseline = same structure with empty content. The tool_result
+	// text above MUST add tokens on top of the per-message overhead;
+	// if it doesn't, estimateTotalTokens is counting only the
+	// structural overhead and not the user-visible content.
+	baseline := []llmlib.Message{
+		{
+			Role: llmlib.RoleTool,
+			Content: []llmlib.ContentBlock{{
+				Type:      llmlib.BlockToolResult,
+				ToolUseID: "123",
+				Text:      "",
+			}},
+		},
+	}
+	baselineTokens := estimateTotalTokens(baseline)
 	tokens := estimateTotalTokens(messages)
-	// Should have some tokens for the content
-	if tokens < 10 {
-		t.Errorf("Expected at least 10 tokens, got %d", tokens)
+	if tokens <= baselineTokens {
+		t.Errorf("Expected tokens > baseline (%d), got %d — tool_result text is not being counted", baselineTokens, tokens)
 	}
 
 	// Tool_use input blocks should also be counted (json string length).
@@ -535,7 +549,11 @@ func TestEstimateTotalTokensWithToolContent(t *testing.T) {
 			},
 		}},
 	}}
-	if estimateTotalTokens(withToolUse) <= 0 {
-		t.Errorf("Expected non-zero tokens for tool_use input")
+	withToolUseBaseline := []llmlib.Message{{
+		Role:    llmlib.RoleAssistant,
+		Content: []llmlib.ContentBlock{{Type: llmlib.BlockToolUse, ToolUse: &llmlib.ToolUse{}}},
+	}}
+	if estimateTotalTokens(withToolUse) <= estimateTotalTokens(withToolUseBaseline) {
+		t.Errorf("Expected tool_use input length to contribute additional tokens")
 	}
 }

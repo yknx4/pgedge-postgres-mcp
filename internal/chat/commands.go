@@ -1104,6 +1104,19 @@ func (c *Client) loadConversation(ctx context.Context, id string) bool {
 				}
 			}
 		}
+
+		// Re-evaluate writable state for the restored database — the
+		// previous session's flag is stale and would otherwise drive
+		// the system prompt and write-confirmation gates.
+		c.currentDBWritable = false
+		if databases, current, err := c.mcp.ListDatabases(ctx); err == nil {
+			for _, db := range databases {
+				if db.Name == current && db.AllowWrites {
+					c.currentDBWritable = true
+					break
+				}
+			}
+		}
 	}
 
 	c.ui.PrintSystemMessage(fmt.Sprintf("Loaded conversation: %s", conv.Title))

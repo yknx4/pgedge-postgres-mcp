@@ -1004,10 +1004,26 @@ func (c *Client) processQuery(ctx context.Context, query string) error {
 				// Give the thinking animation goroutine time to clear the line
 				time.Sleep(50 * time.Millisecond)
 
-				// Decode tool input for execution and display.
+				// Decode tool input for execution and display. A malformed
+				// input is a model error — fail the tool call rather than
+				// invoking it with whatever happened to parse (or an empty
+				// object), which can do real damage with query_database.
 				input := map[string]interface{}{}
 				if len(toolUse.Input) > 0 {
-					_ = json.Unmarshal(toolUse.Input, &input)
+					if err := json.Unmarshal(toolUse.Input, &input); err != nil {
+						close(thinkingDone)
+						time.Sleep(50 * time.Millisecond)
+						c.ui.PrintError(fmt.Sprintf("Tool %q rejected: failed to parse input: %v", toolUse.Name, err))
+						toolResultBlocks = append(toolResultBlocks, llmlib.ToolResultBlock(
+							toolUse.ID,
+							fmt.Sprintf("Tool input failed to parse: %v. Do not retry; ask the user how to proceed.", err),
+							true,
+						))
+						thinkingDone = make(chan struct{})
+						go c.ui.ShowThinking(reqCtx, thinkingDone)
+						go ListenForEscape(ctx, thinkingDone, cancel)
+						continue
+					}
 				}
 				c.ui.PrintToolExecution(toolUse.Name, input)
 				thinkingDone = make(chan struct{})
