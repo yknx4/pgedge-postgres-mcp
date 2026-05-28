@@ -752,6 +752,12 @@ func mergeConfig(dest, src *Config) {
 		if src.LLM.OllamaURL != "" {
 			dest.LLM.OllamaURL = src.LLM.OllamaURL
 		}
+		if src.LLM.GeminiAPIKey != "" {
+			dest.LLM.GeminiAPIKey = src.LLM.GeminiAPIKey
+		}
+		if src.LLM.GeminiAPIKeyFile != "" {
+			dest.LLM.GeminiAPIKeyFile = src.LLM.GeminiAPIKeyFile
+		}
 		if src.LLM.MaxTokens != 0 {
 			dest.LLM.MaxTokens = src.LLM.MaxTokens
 		}

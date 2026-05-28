@@ -12,6 +12,7 @@ package tools
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/pgEdge/pgedge-go-llm-lib/llm"
 	_ "github.com/pgEdge/pgedge-go-llm-lib/llm/provider/ollama"
@@ -38,8 +39,9 @@ type embedClientConfig struct {
 // and the resolved model name (after defaults are applied) so callers
 // can display it without re-deriving the default logic.
 func newEmbedClient(cfg embedClientConfig) (llm.Client, string, error) {
+	provider := strings.ToLower(strings.TrimSpace(cfg.Provider))
 	var opts llm.Options
-	switch cfg.Provider {
+	switch provider {
 	case "voyage":
 		if cfg.VoyageAPIKey == "" {
 			return nil, "", fmt.Errorf("missing Voyage AI API key for embedding provider 'voyage'")
@@ -78,13 +80,13 @@ func newEmbedClient(cfg embedClientConfig) (llm.Client, string, error) {
 	default:
 		return nil, "", fmt.Errorf(
 			"unsupported embedding provider: %s (supported: voyage, openai, ollama)",
-			cfg.Provider,
+			provider,
 		)
 	}
 
-	client, err := llm.NewClient(cfg.Provider, opts)
+	client, err := llm.NewClient(provider, opts)
 	if err != nil {
-		return nil, "", fmt.Errorf("create %s embedding client: %w", cfg.Provider, err)
+		return nil, "", fmt.Errorf("create %s embedding client: %w", provider, err)
 	}
 	return client, opts.Model, nil
 }
