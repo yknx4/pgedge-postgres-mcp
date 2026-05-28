@@ -158,6 +158,13 @@ export const useLLMProviders = (sessionToken) => {
     // This prevents overwriting user's preference when their model isn't available
     const usingFallbackModelRef = useRef(false);
 
+    // Mirror selectedModel into a ref so the models-fetching effect can
+    // read the current value without re-running on every model change.
+    const selectedModelRef = useRef(selectedModel);
+    useEffect(() => {
+        selectedModelRef.current = selectedModel;
+    }, [selectedModel]);
+
     // Fetch available providers on mount
     useEffect(() => {
         if (!sessionToken) {
@@ -255,17 +262,23 @@ export const useLLMProviders = (sessionToken) => {
             return;
         }
 
+        // Capture the provider at effect start so we can detect stale
+        // responses after a fast provider switch.
+        const providerAtStart = selectedProvider;
+        const controller = new AbortController();
+
         const fetchModels = async () => {
             setLoadingModels(true);
             setError('');
 
             try {
-                console.log('Fetching models for provider:', selectedProvider);
-                const response = await fetch(`/api/llm/v1/models?provider=${encodeURIComponent(selectedProvider)}`, {
+                console.log('Fetching models for provider:', providerAtStart);
+                const response = await fetch(`/api/llm/v1/models?provider=${encodeURIComponent(providerAtStart)}`, {
                     credentials: 'include',
                     headers: {
                         'Authorization': `Bearer ${sessionToken}`,
                     },
+                    signal: controller.signal,
                 });
 
                 console.log('Models response status:', response.status);
@@ -277,6 +290,12 @@ export const useLLMProviders = (sessionToken) => {
 
                 const data = await response.json();
                 console.log('Models data:', data);
+
+                // Bail if the provider changed while we were waiting; the
+                // newer effect run is authoritative.
+                if (controller.signal.aborted) {
+                    return;
+                }
 
                 // The proxy returns models as plain strings; normalise
                 // to the {name, description} shape the UI consumes
@@ -315,7 +334,7 @@ export const useLLMProviders = (sessionToken) => {
                         // Fall through to remembered model logic
                     }
 
-                    const rememberedModel = getPerProviderModel(selectedProvider);
+                    const rememberedModel = getPerProviderModel(providerAtStart);
 
                     if (rememberedModel) {
                         // Check if remembered model is still available (exact match)
@@ -333,7 +352,7 @@ export const useLLMProviders = (sessionToken) => {
                                 usingFallbackModelRef.current = false;
                                 setSelectedModel(familyMatch);
                                 // Save the new version (intentional update to newer model)
-                                setPerProviderModel(selectedProvider, familyMatch);
+                                setPerProviderModel(providerAtStart, familyMatch);
                             } else {
                                 // No exact or family match - fall back to first model
                                 // but DON'T save - preserve user's original preference
@@ -344,27 +363,63 @@ export const useLLMProviders = (sessionToken) => {
                             }
                         }
                     } else {
-                        // No remembered model - use first model and save it
-                        console.log('No remembered model for this provider, selecting first model:', normalisedModels[0].name);
+                        // No remembered model - prefer the provider's
+                        // advertised default (set by fetchProviders) so we
+                        // don't clobber it on first load. Match by name
+                        // against the available models; if the default is
+                        // absent (or not advertised) fall back to the
+                        // first listed model.
+                        const providerEntry = providers.find(p => p.name === providerAtStart);
+                        const advertisedDefault = providerEntry && providerEntry.model;
+                        const defaultExists = advertisedDefault &&
+                            normalisedModels.some(m => m.name === advertisedDefault);
+                        const chosenModel = defaultExists
+                            ? advertisedDefault
+                            : normalisedModels[0].name;
+
+                        console.log('No remembered model for this provider, selecting:', chosenModel);
                         usingFallbackModelRef.current = false;
-                        setSelectedModel(normalisedModels[0].name);
-                        // Save the selection (first time using this provider)
-                        setPerProviderModel(selectedProvider, normalisedModels[0].name);
+                        setSelectedModel(chosenModel);
+                        // Only persist when the choice differs from the
+                        // already-selected model. fetchProviders may have
+                        // already set selectedModel to the advertised
+                        // default; persisting unconditionally would
+                        // clobber that into local storage on first load
+                        // before the user has expressed a preference.
+                        // Read via ref so this effect doesn't depend on
+                        // selectedModel (which would cause it to re-run
+                        // whenever the model changes).
+                        if (chosenModel !== selectedModelRef.current) {
+                            setPerProviderModel(providerAtStart, chosenModel);
+                        }
                     }
                 } else {
                     console.warn('No models returned from API');
                 }
             } catch (err) {
+                if (err.name === 'AbortError') {
+                    console.log('Models fetch aborted for provider:', providerAtStart);
+                    return;
+                }
                 console.error('Error fetching models:', err);
                 setModels([]);
                 setError('Failed to load models. Please check browser console.');
             } finally {
-                setLoadingModels(false);
+                // Only clear loading state if this effect run is still
+                // current. The newer run will manage its own loading
+                // state.
+                if (!controller.signal.aborted) {
+                    setLoadingModels(false);
+                }
             }
         };
 
         fetchModels();
-    }, [selectedProvider, sessionToken]);
+
+        return () => {
+            controller.abort();
+        };
+    }, [selectedProvider, sessionToken, providers]);
 
     // Save model when user manually changes it (not when provider changes)
     useEffect(() => {
