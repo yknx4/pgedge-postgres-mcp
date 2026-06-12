@@ -716,6 +716,8 @@ func performWeightedVectorSearch(
 	weightMap := make(map[string]float64)
 
 	for _, weight := range columnWeights {
+		// weight.VectorName is a column name, so it keys into typeByName
+		// (built from ColumnInfo.ColumnName); a miss yields "" -> "vector".
 		cast := vectorCastFor(typeByName[weight.VectorName])
 		weightedParts = append(weightedParts, fmt.Sprintf(
 			"(%s %s $1::%s) * %f",
