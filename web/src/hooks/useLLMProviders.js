@@ -32,11 +32,14 @@ const providerDisplayLabel = (name) => {
 // is `{name, model, default}`; the UI expects a `display` field and
 // retains the old `isDefault` alias for compatibility with any
 // consumers that still reference it.
-const normaliseProviders = (rawProviders) => {
+export const normaliseProviders = (rawProviders) => {
     if (!Array.isArray(rawProviders)) return [];
     return rawProviders.map((p) => ({
         name: p.name,
-        display: providerDisplayLabel(p.name),
+        // Prefer the proxy-supplied human-readable name (v0.1.0+ reports
+        // `display_name`); accept camelCase defensively. Fall back to the
+        // local label map when the API omits it.
+        display: p.display_name || p.displayName || providerDisplayLabel(p.name),
         model: p.model || '',
         isDefault: Boolean(p.default),
     }));
