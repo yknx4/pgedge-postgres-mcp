@@ -624,6 +624,8 @@ func generateQueryEmbeddingWithConfig(serverCfg *config.Config, queryText string
 		OpenAIAPIKey:  serverCfg.Embedding.OpenAIAPIKey,
 		OpenAIBaseURL: serverCfg.Embedding.OpenAIBaseURL,
 		OllamaURL:     serverCfg.Embedding.OllamaURL,
+
+		PerAttemptTimeout: serverCfg.Embedding.PerAttemptTimeout,
 	})
 	if err != nil {
 		return nil, err
