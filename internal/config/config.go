@@ -469,15 +469,16 @@ type KnowledgebaseConfig struct {
 	DatabasePath string `yaml:"database_path"` // Path to SQLite knowledgebase database
 
 	// Embedding provider configuration for KB similarity search (independent of generate_embeddings tool)
-	EmbeddingProvider         string `yaml:"embedding_provider"`            // "voyage", "openai", or "ollama"
-	EmbeddingModel            string `yaml:"embedding_model"`               // Provider-specific model name
-	EmbeddingVoyageAPIKey     string `yaml:"embedding_voyage_api_key"`      // API key for Voyage AI
-	EmbeddingVoyageAPIKeyFile string `yaml:"embedding_voyage_api_key_file"` // Path to file containing Voyage API key
-	EmbeddingVoyageBaseURL    string `yaml:"embedding_voyage_base_url"`     // Base URL for Voyage API (default: https://api.voyageai.com/v1/embeddings)
-	EmbeddingOpenAIAPIKey     string `yaml:"embedding_openai_api_key"`      // API key for OpenAI
-	EmbeddingOpenAIAPIKeyFile string `yaml:"embedding_openai_api_key_file"` // Path to file containing OpenAI API key
-	EmbeddingOpenAIBaseURL    string `yaml:"embedding_openai_base_url"`     // Base URL for OpenAI API (default: https://api.openai.com/v1)
-	EmbeddingOllamaURL        string `yaml:"embedding_ollama_url"`          // URL for Ollama service (default: http://localhost:11434)
+	EmbeddingProvider          string `yaml:"embedding_provider"`            // "voyage", "openai", or "ollama"
+	EmbeddingModel             string `yaml:"embedding_model"`               // Provider-specific model name
+	EmbeddingVoyageAPIKey      string `yaml:"embedding_voyage_api_key"`      // API key for Voyage AI
+	EmbeddingVoyageAPIKeyFile  string `yaml:"embedding_voyage_api_key_file"` // Path to file containing Voyage API key
+	EmbeddingVoyageBaseURL     string `yaml:"embedding_voyage_base_url"`     // Base URL for Voyage API (default: https://api.voyageai.com/v1/embeddings)
+	EmbeddingOpenAIAPIKey      string `yaml:"embedding_openai_api_key"`      // API key for OpenAI
+	EmbeddingOpenAIAPIKeyFile  string `yaml:"embedding_openai_api_key_file"` // Path to file containing OpenAI API key
+	EmbeddingOpenAIBaseURL     string `yaml:"embedding_openai_base_url"`     // Base URL for OpenAI API (default: https://api.openai.com/v1)
+	EmbeddingOllamaURL         string `yaml:"embedding_ollama_url"`          // URL for Ollama service (default: http://localhost:11434)
+	EmbeddingPerAttemptTimeout int    `yaml:"embedding_per_attempt_timeout"` // Per-attempt HTTP timeout in seconds for KB embeddings (0 = unlimited; default: 60)
 }
 
 // LoadConfig loads configuration with proper priority:
@@ -619,13 +620,14 @@ func defaultConfig() *Config {
 			PerAttemptTimeout: 60,                       // Default per-attempt HTTP timeout (seconds)
 		},
 		Knowledgebase: KnowledgebaseConfig{
-			Enabled:               false,                    // Disabled by default (opt-in)
-			DatabasePath:          "",                       // Must be provided if enabled
-			EmbeddingProvider:     "ollama",                 // Default provider for KB embeddings
-			EmbeddingModel:        "nomic-embed-text",       // Default Ollama model
-			EmbeddingOllamaURL:    "http://localhost:11434", // Default Ollama URL
-			EmbeddingVoyageAPIKey: "",                       // Must be provided if using Voyage
-			EmbeddingOpenAIAPIKey: "",                       // Must be provided if using OpenAI
+			Enabled:                    false,                    // Disabled by default (opt-in)
+			DatabasePath:               "",                       // Must be provided if enabled
+			EmbeddingProvider:          "ollama",                 // Default provider for KB embeddings
+			EmbeddingModel:             "nomic-embed-text",       // Default Ollama model
+			EmbeddingOllamaURL:         "http://localhost:11434", // Default Ollama URL
+			EmbeddingVoyageAPIKey:      "",                       // Must be provided if using Voyage
+			EmbeddingOpenAIAPIKey:      "",                       // Must be provided if using OpenAI
+			EmbeddingPerAttemptTimeout: 60,                       // Default per-attempt HTTP timeout (seconds)
 		},
 		SecretFile: "", // Will be set to default path if not specified
 	}
@@ -808,6 +810,9 @@ func mergeConfig(dest, src *Config) {
 		}
 		if src.Knowledgebase.EmbeddingOllamaURL != "" {
 			dest.Knowledgebase.EmbeddingOllamaURL = src.Knowledgebase.EmbeddingOllamaURL
+		}
+		if src.Knowledgebase.EmbeddingPerAttemptTimeout != 0 {
+			dest.Knowledgebase.EmbeddingPerAttemptTimeout = src.Knowledgebase.EmbeddingPerAttemptTimeout
 		}
 	}
 
@@ -1093,6 +1098,7 @@ func applyEnvironmentVariables(cfg *Config) {
 	// Base URL overrides for KB embedding providers (useful for proxies)
 	setStringFromEnv(&cfg.Knowledgebase.EmbeddingVoyageBaseURL, "PGEDGE_KB_VOYAGE_BASE_URL")
 	setStringFromEnv(&cfg.Knowledgebase.EmbeddingOpenAIBaseURL, "PGEDGE_KB_OPENAI_BASE_URL")
+	setIntFromEnv(&cfg.Knowledgebase.EmbeddingPerAttemptTimeout, "PGEDGE_KB_EMBEDDING_PER_ATTEMPT_TIMEOUT")
 
 	// Secret file
 	setStringFromEnv(&cfg.SecretFile, "PGEDGE_SECRET_FILE")

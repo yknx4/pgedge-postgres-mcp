@@ -256,13 +256,14 @@ func generateKBQueryEmbedding(serverCfg *config.Config, queryText string) ([]flo
 	}
 
 	client, _, err := newEmbedClient(embedClientConfig{
-		Provider:      kbCfg.EmbeddingProvider,
-		Model:         kbCfg.EmbeddingModel,
-		VoyageAPIKey:  kbCfg.EmbeddingVoyageAPIKey,
-		VoyageBaseURL: kbCfg.EmbeddingVoyageBaseURL,
-		OpenAIAPIKey:  kbCfg.EmbeddingOpenAIAPIKey,
-		OpenAIBaseURL: kbCfg.EmbeddingOpenAIBaseURL,
-		OllamaURL:     kbCfg.EmbeddingOllamaURL,
+		Provider:          kbCfg.EmbeddingProvider,
+		Model:             kbCfg.EmbeddingModel,
+		VoyageAPIKey:      kbCfg.EmbeddingVoyageAPIKey,
+		VoyageBaseURL:     kbCfg.EmbeddingVoyageBaseURL,
+		OpenAIAPIKey:      kbCfg.EmbeddingOpenAIAPIKey,
+		OpenAIBaseURL:     kbCfg.EmbeddingOpenAIBaseURL,
+		OllamaURL:         kbCfg.EmbeddingOllamaURL,
+		PerAttemptTimeout: kbCfg.EmbeddingPerAttemptTimeout,
 	})
 	if err != nil {
 		return nil, "", err
