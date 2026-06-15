@@ -79,6 +79,9 @@ RUN if [ "${KB_SOURCE}" = "package" ]; then \
         curl -fsSL -o /usr/share/pgedge/nla-kb/kb.db "${KB_SOURCE}" && \
         chown 1001:1001 /usr/share/pgedge/nla-kb/kb.db && \
         echo "Knowledgebase downloaded successfully"; \
+    elif [ -n "${KB_SOURCE}" ]; then \
+        echo "ERROR: unsupported KB_SOURCE '${KB_SOURCE}' (expected 'package' or an http(s):// URL)" >&2; \
+        exit 1; \
     fi
 
 # Copy local knowledgebase file if it exists (glob pattern allows missing file)
