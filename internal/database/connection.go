@@ -313,9 +313,9 @@ func (c *Client) LoadMetadata() error {
 //
 // The function orchestrates four steps:
 //  1. Run loadMetadataSQL against the connection's pool.
-//  2. Scan each row via scanMetadataRow into a typed metadataRow.
-//  3. Hand the scanned rows to buildTableInfo, which produces the
-//     per-table metadata map without doing any I/O.
+//  2. Scan each row via scanMetadataRow and fold it straight into a
+//     metadataAccumulator, so rows are never buffered in a slice.
+//  3. Take the per-table metadata map the accumulator produced.
 //  4. Atomically swap the result in under the client's lock and log.
 func (c *Client) LoadMetadataFor(connStr string) error {
 	startTime := time.Now()
@@ -347,7 +347,7 @@ func (c *Client) LoadMetadataFor(connStr string) error {
 	}
 	defer rows.Close()
 
-	var scanned []metadataRow
+	acc := newMetadataAccumulator()
 	for rows.Next() {
 		r, err := scanMetadataRow(rows)
 		if err != nil {
@@ -355,7 +355,7 @@ func (c *Client) LoadMetadataFor(connStr string) error {
 			LogMetadataLoad(connStr, 0, duration, err)
 			return fmt.Errorf("failed to scan row: %w", err)
 		}
-		scanned = append(scanned, r)
+		acc.add(r)
 	}
 	if err := rows.Err(); err != nil {
 		duration := time.Since(startTime)
@@ -363,7 +363,7 @@ func (c *Client) LoadMetadataFor(connStr string) error {
 		return err
 	}
 
-	newMetadata, schemaSet, columnCount := buildTableInfo(scanned)
+	newMetadata, schemaSet, columnCount := acc.metadata, acc.schemas, acc.columnCount
 
 	c.mu.Lock()
 	conn.Metadata = newMetadata

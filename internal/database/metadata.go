@@ -137,6 +137,45 @@ func tableInfoFromRow(r metadataRow) TableInfo {
 	}
 }
 
+// metadataAccumulator groups metadata rows by (schema, table) into the
+// metadata map as they arrive. Rows can be fed one at a time via add, so
+// callers may stream straight from a result set without first buffering
+// every row in a slice. The grouping logic lives here so the streaming
+// path and the slice-based buildTableInfo helper stay in sync.
+type metadataAccumulator struct {
+	metadata    map[string]TableInfo
+	schemas     map[string]bool
+	columnCount int
+}
+
+// newMetadataAccumulator returns an accumulator with initialised maps.
+func newMetadataAccumulator() *metadataAccumulator {
+	return &metadataAccumulator{
+		metadata: make(map[string]TableInfo),
+		schemas:  make(map[string]bool),
+	}
+}
+
+// add folds a single scanned row into the accumulated metadata. Rows with
+// a NULL or empty column name (tables with no columns) contribute a
+// TableInfo with Columns == [] but do not increment columnCount.
+func (a *metadataAccumulator) add(r metadataRow) {
+	key := r.SchemaName + "." + r.TableName
+	a.schemas[r.SchemaName] = true
+
+	table, exists := a.metadata[key]
+	if !exists {
+		table = tableInfoFromRow(r)
+	}
+
+	if r.ColumnName.Valid && r.ColumnName.String != "" {
+		table.Columns = append(table.Columns, columnInfoFromRow(r))
+		a.columnCount++
+	}
+
+	a.metadata[key] = table
+}
+
 // buildTableInfo groups scanned rows by (schema, table) and constructs
 // the metadata map. The returned map is keyed "schema.table". schemas
 // collects the distinct schema names seen. columnCount is the total
@@ -144,27 +183,13 @@ func tableInfoFromRow(r metadataRow) TableInfo {
 // NULL or empty column name (tables with no columns) contribute a
 // TableInfo with Columns == [] but do not increment columnCount.
 //
-// This function is pure: no I/O, no time, no shared state.
+// This function is pure: no I/O, no time, no shared state. It is retained
+// for the unit tests; the production load path streams rows through a
+// metadataAccumulator instead of buffering them in a slice.
 func buildTableInfo(rows []metadataRow) (metadata map[string]TableInfo, schemas map[string]bool, columnCount int) {
-	metadata = make(map[string]TableInfo)
-	schemas = make(map[string]bool)
-
+	acc := newMetadataAccumulator()
 	for _, r := range rows {
-		key := r.SchemaName + "." + r.TableName
-		schemas[r.SchemaName] = true
-
-		table, exists := metadata[key]
-		if !exists {
-			table = tableInfoFromRow(r)
-		}
-
-		if r.ColumnName.Valid && r.ColumnName.String != "" {
-			table.Columns = append(table.Columns, columnInfoFromRow(r))
-			columnCount++
-		}
-
-		metadata[key] = table
+		acc.add(r)
 	}
-
-	return metadata, schemas, columnCount
+	return acc.metadata, acc.schemas, acc.columnCount
 }
