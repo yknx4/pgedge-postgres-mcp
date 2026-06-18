@@ -44,6 +44,28 @@ and this project adheres to
   are now also acknowledged silently rather than receiving a `-32601`
   error reply. (#142)
 
+- Stdio transport now correctly distinguishes JSON-RPC notifications
+  (no `id` member) from requests with an explicit `"id": null` (per
+  JSON-RPC 2.0 §4.1). A request with `"id": null` targeting an unknown
+  method previously matched the same `req.ID == nil` guard used to
+  suppress notification replies and was silently dropped; it now
+  receives the required `-32601 Method not found` response. The
+  hardcoded `notifications/initialized` case was likewise affected and
+  is now filtered uniformly with all other notifications at the read
+  loop, using the same `hasIDField` raw-bytes probe introduced for the
+  HTTP transport in #142. (#152)
+
+- JSON-RPC response now always serializes the `id` field, including
+  when it is null. Per JSON-RPC 2.0 §5.1, the response object MUST
+  include the id member; the value is the originating request's id, or
+  null when the id cannot be determined (parse error / invalid
+  request) or when the request itself used `"id": null`. The
+  `JSONRPCResponse.ID` JSON tag previously used `omitempty`, which
+  caused Go's encoder to drop the field for nil interface values —
+  producing a response without an `id` field, which is itself a
+  malformed JSON-RPC body. This affects both the HTTP and stdio
+  transports. (#152)
+
 - Database switching via `select_database_connection` now persists
   correctly in HTTP mode for unbound API tokens.
   `GetAccessibleDatabases` previously returned only the first
