@@ -102,16 +102,19 @@ function Get-Platform {
 # --- Get latest release version -------------------------------------------
 
 # Does the server binary asset exist for a given tag on this platform?
-# Rejects only on a definitive 404 — any other failure (transient network, a
-# proxy that blocks HEAD) is treated as "present" so we don't wrongly skip a
-# good release and strand every Windows user.
+# Uses a 0-byte ranged GET (Range: bytes=0-0), matching install.sh: HEAD is
+# unreliable against GitHub's asset redirect to S3, which can reject it. Rejects
+# only on a definitive 404 — any other failure (transient network, a proxy
+# quirk) is treated as "present" so we don't wrongly skip a good release and
+# strand every Windows user.
 function Test-AssetExists {
     param([string]$Tag)
     $num = $Tag.TrimStart('v')
     $asset = "pgedge-postgres-mcp-server_${num}_$($script:OS)_$($script:Arch).$($script:Ext)"
     $url = "https://github.com/$Repo/releases/download/$Tag/$asset"
     try {
-        Invoke-WebRequest -Uri $url -Method Head -UseBasicParsing -ErrorAction Stop | Out-Null
+        Invoke-WebRequest -Uri $url -Headers @{ Range = "bytes=0-0" } `
+            -UseBasicParsing -ErrorAction Stop | Out-Null
         return $true
     } catch {
         if ($_.Exception.Response -and [int]$_.Exception.Response.StatusCode -eq 404) {
@@ -151,8 +154,14 @@ function Get-LatestVersion {
     # Stable v* releases only, ordered by semantic version (highest first).
     # GitHub lists releases by date, not version, so a hotfix cut on an older
     # line after a newer release would otherwise be picked ahead of it.
+    #
+    # Filter structurally on the tag, matching install.sh: reject any tag with a
+    # "-" (v1.0.0-beta3, -rc1…) rather than trusting GitHub's prerelease flag.
+    # This repo does not set that flag reliably — its beta/alpha tags are all
+    # published with prerelease=false — so the flag alone would let an RC slip
+    # through whenever a release line has no stable counterpart yet.
     $candidates = @($releases |
-        Where-Object { -not $_.draft -and -not $_.prerelease -and $_.tag_name -match '^v\d' } |
+        Where-Object { -not $_.draft -and -not $_.prerelease -and $_.tag_name -match '^v\d' -and $_.tag_name -notmatch '-' } |
         ForEach-Object { $_.tag_name } |
         Sort-Object { try { [version]($_.TrimStart('v')) } catch { [version]'0.0' } } -Descending)
 
