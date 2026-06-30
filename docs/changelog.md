@@ -9,6 +9,16 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- Each built-in tool, resource, and prompt can now be enabled or
+  disabled via an environment variable in addition to the
+  `builtins` section of the configuration file. The variables are
+  `PGEDGE_BUILTIN_TOOL_*`, `PGEDGE_BUILTIN_RESOURCE_*`, and
+  `PGEDGE_BUILTIN_PROMPT_*`; see the configuration reference for
+  the complete list. This is useful in containerized deployments
+  where editing the configuration file is awkward. (#139)
+
 ### Changed
 
 - Refactored `Client.LoadMetadataFor` in
@@ -19,6 +29,15 @@ and this project adheres to
   `internal/database/metadata.go`. `buildTableInfo` is pure and is
   covered by table-driven unit tests that do not require a live
   database. No behavior change. (#153)
+
+- The built-in `pg://system_info` resource now uses the machine-safe
+  name `postgresql_system_info` (previously
+  `"PostgreSQL System Information"`). The new name matches the
+  identifier pattern enforced by Anthropic's tool-name validation
+  (`^[a-zA-Z0-9_-]{1,128}$`), so the resource no longer breaks
+  interoperability when a downstream MCP client forwards built-in
+  capability names as provider tool names. The resource URI is
+  unchanged. (#139)
 
 - The KB Builder (formerly `cmd/kb-builder` and the
   `internal/kb*` packages) has moved to a standalone project at
@@ -52,6 +71,28 @@ and this project adheres to
   MCP SDK) to throw on every notification. Unknown notification methods
   are now also acknowledged silently rather than receiving a `-32601`
   error reply. (#142)
+
+- Stdio transport now correctly distinguishes JSON-RPC notifications
+  (no `id` member) from requests with an explicit `"id": null` (per
+  JSON-RPC 2.0 §4.1). A request with `"id": null` targeting an unknown
+  method previously matched the same `req.ID == nil` guard used to
+  suppress notification replies and was silently dropped; it now
+  receives the required `-32601 Method not found` response. The
+  hardcoded `notifications/initialized` case was likewise affected and
+  is now filtered uniformly with all other notifications at the read
+  loop, using the same `hasIDField` raw-bytes probe introduced for the
+  HTTP transport in #142. (#152)
+
+- JSON-RPC response now always serializes the `id` field, including
+  when it is null. Per JSON-RPC 2.0 §5.1, the response object MUST
+  include the id member; the value is the originating request's id, or
+  null when the id cannot be determined (parse error / invalid
+  request) or when the request itself used `"id": null`. The
+  `JSONRPCResponse.ID` JSON tag previously used `omitempty`, which
+  caused Go's encoder to drop the field for nil interface values —
+  producing a response without an `id` field, which is itself a
+  malformed JSON-RPC body. This affects both the HTTP and stdio
+  transports. (#152)
 
 - Database switching via `select_database_connection` now persists
   correctly in HTTP mode for unbound API tokens.

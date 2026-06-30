@@ -29,3 +29,7 @@ implemented.
 
 - Add REST APIs to allow automated management of users and connections (store
     in SQLite, merge with hard-configured users/connections).
+
+## General
+
+- Add an audit log to record potentially destructive and security related actions etc.
