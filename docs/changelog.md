@@ -92,6 +92,21 @@ and this project adheres to
   exposed alongside the non-streaming endpoint. The non-streaming
   `/v1/chat` endpoint remains available for callers that prefer it.
 
+- The web chat interface now consumes the streaming endpoint
+  `/api/llm/v1/chat/stream` (Server-Sent Events) and renders the
+  assistant response incrementally as chunks arrive. The
+  non-streaming endpoint stays available for callers that prefer
+  it. A new `web/src/utils/sseChat.js` helper handles the SSE
+  parsing and assembles the final response into the same shape
+  the non-streaming endpoint returns, so the agentic chat loop is
+  unchanged.
+
+- The tools `search_knowledgebase`, `generate_embedding`, and
+  `similarity_search` now construct their embedding client
+  directly via `llm.NewClient` rather than going through the old
+  `embedding.NewProvider` wrapper. The `internal/embedding/`
+  package is deleted entirely.
+
 ### Fixed
 
 - Metadata loader now tolerates tables with zero columns
@@ -177,6 +192,12 @@ and this project adheres to
   token and needing access to multiple databases). The setting is
   honored by both the single-database and multi-database
   initialization paths. (#167)
+
+- Google Gemini is now a supported LLM provider. Configure via
+  `gemini_api_key` / `gemini_api_key_file` in the config file or
+  via the `PGEDGE_GEMINI_API_KEY` / `GEMINI_API_KEY` environment
+  variables.
+
 ### Fixed
 
 - Fixed port detection on Windows; the installer now reliably

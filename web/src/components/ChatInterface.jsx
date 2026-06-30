@@ -23,6 +23,7 @@ import ProviderSelector from './ProviderSelector';
 import PromptPopover from './PromptPopover';
 import WriteQueryConfirmDialog from './WriteQueryConfirmDialog';
 import { isWriteQuery } from '../utils/queryClassify';
+import { sseChat } from '../utils/sseChat';
 
 const MAX_AGENTIC_LOOPS = 50;
 // Compact if estimated tokens exceed this threshold.
@@ -769,54 +770,78 @@ const ChatInterface = ({ conversations }) => {
                     });
                 }
 
-                // Call LLM with compacted history. The proxy now lives
-                // under /api/llm/v1/* and always returns token usage in
-                // the response body (no `debug` flag is needed).
-                const llmResponse = await fetch('/api/llm/v1/chat', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${sessionToken}`,
-                    },
-                    credentials: 'include',
-                    signal: abortController.signal,
-                    body: JSON.stringify({
+                // Call LLM with compacted history via the streaming
+                // endpoint. The proxy lives under /api/llm/v1/* and
+                // always returns token usage on the done frame. Text
+                // chunks arrive incrementally and update the assistant
+                // bubble in real time; tool_use blocks are assembled
+                // by sseChat into the same shape /v1/chat returns so
+                // the agentic loop below is unchanged.
+                let streamedText = '';
+                let llmData;
+                try {
+                    llmData = await sseChat({
                         messages: compactedMessages,
                         tools: toProxyTools(tools),
                         provider: llmProviders.selectedProvider,
                         model: llmProviders.selectedModel,
-                    }),
-                });
-
-                // Handle session invalidation
-                if (llmResponse.status === 401) {
-                    console.log('Session invalidated, logging out...');
-                    // Convert thinking message to error message before logout
-                    setMessages(prev => {
-                        const newMessages = [...prev];
-                        if (newMessages.length > 0 && newMessages[newMessages.length - 1].isThinking) {
-                            const thinkingMsg = newMessages[newMessages.length - 1];
-                            newMessages[newMessages.length - 1] = {
-                                role: 'assistant',
-                                content: 'Error: Your session has expired. Please log in again.',
-                                timestamp: new Date().toISOString(),
-                                provider: thinkingMsg.provider,
-                                model: thinkingMsg.model,
-                                activity: thinkingMsg.activity || [],
-                                isError: true
-                            };
-                        }
-                        return newMessages;
+                    }, {
+                        signal: abortController.signal,
+                        sessionToken,
+                        onTextChunk: (chunk) => {
+                            if (!chunk) return;
+                            streamedText += chunk;
+                            // Stream the partial text into the thinking
+                            // bubble so the user sees progress as it
+                            // arrives. We keep isThinking=true so the
+                            // indicator and activity panel keep working
+                            // until the final response is committed.
+                            setMessages(prev => {
+                                const newMessages = [...prev];
+                                const last = newMessages[newMessages.length - 1];
+                                if (last && last.isThinking) {
+                                    newMessages[newMessages.length - 1] = {
+                                        ...last,
+                                        content: streamedText,
+                                    };
+                                }
+                                return newMessages;
+                            });
+                        },
                     });
-                    forceLogout();
-                    return;
-                }
+                } catch (streamErr) {
+                    // Re-raise AbortError so the outer handler converts
+                    // it to a "Request cancelled" message.
+                    if (streamErr.name === 'AbortError') {
+                        throw streamErr;
+                    }
 
-                if (!llmResponse.ok) {
-                    const errorText = await llmResponse.text();
+                    // Session expired.
+                    if (streamErr.status === 401) {
+                        console.log('Session invalidated, logging out...');
+                        setMessages(prev => {
+                            const newMessages = [...prev];
+                            if (newMessages.length > 0 && newMessages[newMessages.length - 1].isThinking) {
+                                const thinkingMsg = newMessages[newMessages.length - 1];
+                                newMessages[newMessages.length - 1] = {
+                                    role: 'assistant',
+                                    content: 'Error: Your session has expired. Please log in again.',
+                                    timestamp: new Date().toISOString(),
+                                    provider: thinkingMsg.provider,
+                                    model: thinkingMsg.model,
+                                    activity: thinkingMsg.activity || [],
+                                    isError: true
+                                };
+                            }
+                            return newMessages;
+                        });
+                        forceLogout();
+                        return;
+                    }
 
-                    // Check for rate limit error
-                    if (isRateLimitError(llmResponse.status, errorText)) {
+                    // Rate limit handling mirrors the non-streaming path.
+                    const errorText = streamErr.body || streamErr.message || '';
+                    if (isRateLimitError(streamErr.status, errorText)) {
                         rateLimitRetryCount++;
                         const rateLimitDetails = parseRateLimitError(errorText);
                         const estimatedTokens = estimateTotalTokens(compactedMessages);
@@ -828,7 +853,6 @@ const ChatInterface = ({ conversations }) => {
                             console.log('[Rate Limit] First hit, pausing for 60 seconds before retry...');
                             console.log(`[Rate Limit] Cumulative tokens in last minute: ${cumulativeTokens}, requests: ${requestCount}`);
 
-                            // Add rate limit activity
                             activity.push({
                                 type: 'rate_limit_pause',
                                 timestamp: new Date().toISOString(),
@@ -838,7 +862,6 @@ const ChatInterface = ({ conversations }) => {
                                 requestCount: requestCount,
                             });
 
-                            // Update thinking message to show we're waiting
                             setMessages(prev => {
                                 const newMessages = [...prev];
                                 if (newMessages.length > 0 && newMessages[newMessages.length - 1].isThinking) {
@@ -850,14 +873,10 @@ const ChatInterface = ({ conversations }) => {
                                 return newMessages;
                             });
 
-                            // Wait 60 seconds
                             await delay(RATE_LIMIT_RETRY_DELAY_MS);
-
-                            // Don't increment loopCount for rate limit retries
                             loopCount--;
                             continue;
                         } else {
-                            // Second rate limit hit - give up with friendly message
                             const tokenInfo = cumulativeTokens > 0
                                 ? `Tokens used in last minute: ~${cumulativeTokens.toLocaleString()} (${requestCount} requests)`
                                 : `Estimated tokens in this request: ~${estimatedTokens.toLocaleString()}`;
@@ -871,10 +890,8 @@ const ChatInterface = ({ conversations }) => {
                         }
                     }
 
-                    throw new Error(`LLM request failed: ${llmResponse.status} ${errorText}`);
+                    throw new Error(`LLM request failed: ${streamErr.message}`);
                 }
-
-                const llmData = await llmResponse.json();
 
                 // Track token usage for rate limit awareness. The proxy
                 // now returns usage under the `usage` key (was
@@ -1185,6 +1202,14 @@ const ChatInterface = ({ conversations }) => {
 
         setExecutingPrompt(true);
 
+        // Create AbortController for this request so the existing
+        // cancel button (wired to handleCancel via abortControllerRef)
+        // can terminate an in-flight streaming response. Share the ref
+        // with handleSend; only one flow can be active at a time
+        // because both gate on the `loading` flag.
+        const abortController = new AbortController();
+        abortControllerRef.current = abortController;
+
         try {
             // Get the prompt with arguments from MCP server
             const promptResult = await mcpClient.getPrompt(promptName, args);
@@ -1282,31 +1307,51 @@ const ChatInterface = ({ conversations }) => {
                     });
                 }
 
-                // Make LLM request with compacted history. The proxy
-                // always returns token usage (no `debug` flag is needed).
-                const response = await fetch('/api/llm/v1/chat', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${sessionToken}`,
-                    },
-                    body: JSON.stringify({
+                // Make LLM request with compacted history via the
+                // streaming endpoint. Text chunks update the thinking
+                // bubble as they arrive; tool_use blocks are assembled
+                // by sseChat into the same shape /v1/chat returns.
+                let streamedText = '';
+                let llmData;
+                try {
+                    llmData = await sseChat({
                         messages: compactedMessages,
                         tools: toProxyTools(tools),
                         provider: llmProviders.selectedProvider,
                         model: llmProviders.selectedModel,
-                    }),
-                });
+                    }, {
+                        signal: abortController.signal,
+                        sessionToken,
+                        onTextChunk: (chunk) => {
+                            if (!chunk) return;
+                            streamedText += chunk;
+                            setMessages(prev => {
+                                const newMessages = [...prev];
+                                const last = newMessages[newMessages.length - 1];
+                                if (last && last.isThinking) {
+                                    newMessages[newMessages.length - 1] = {
+                                        ...last,
+                                        content: streamedText,
+                                    };
+                                }
+                                return newMessages;
+                            });
+                        },
+                    });
+                } catch (streamErr) {
+                    // Re-raise AbortError so the outer handler converts
+                    // it to a "Request cancelled" message.
+                    if (streamErr.name === 'AbortError') {
+                        throw streamErr;
+                    }
 
-                if (!response.ok) {
-                    if (response.status === 401) {
+                    if (streamErr.status === 401) {
                         forceLogout();
                         throw new Error('Session expired. Please login again.');
                     }
-                    const errorText = await response.text();
 
-                    // Check for rate limit error
-                    if (isRateLimitError(response.status, errorText)) {
+                    const errorText = streamErr.body || streamErr.message || '';
+                    if (isRateLimitError(streamErr.status, errorText)) {
                         rateLimitRetryCount++;
                         const rateLimitDetails = parseRateLimitError(errorText);
                         const estimatedTokens = estimateTotalTokens(compactedMessages);
@@ -1318,7 +1363,6 @@ const ChatInterface = ({ conversations }) => {
                             console.log('[Rate Limit] First hit, pausing for 60 seconds before retry...');
                             console.log(`[Rate Limit] Cumulative tokens in last minute: ${cumulativeTokens}, requests: ${requestCount}`);
 
-                            // Add rate limit activity
                             activity.push({
                                 type: 'rate_limit_pause',
                                 timestamp: new Date().toISOString(),
@@ -1328,7 +1372,6 @@ const ChatInterface = ({ conversations }) => {
                                 requestCount: requestCount,
                             });
 
-                            // Update thinking message to show we're waiting
                             setMessages(prev => {
                                 const newMessages = [...prev];
                                 if (newMessages.length > 0 && newMessages[newMessages.length - 1].isThinking) {
@@ -1340,14 +1383,10 @@ const ChatInterface = ({ conversations }) => {
                                 return newMessages;
                             });
 
-                            // Wait 60 seconds
                             await delay(RATE_LIMIT_RETRY_DELAY_MS);
-
-                            // Don't increment loopCount for rate limit retries
                             loopCount--;
                             continue;
                         } else {
-                            // Second rate limit hit - give up with friendly message
                             const tokenInfo = cumulativeTokens > 0
                                 ? `Tokens used in last minute: ~${cumulativeTokens.toLocaleString()} (${requestCount} requests)`
                                 : `Estimated tokens in this request: ~${estimatedTokens.toLocaleString()}`;
@@ -1361,10 +1400,8 @@ const ChatInterface = ({ conversations }) => {
                         }
                     }
 
-                    throw new Error(`Server error: ${errorText}`);
+                    throw new Error(`Server error: ${errorText || streamErr.message}`);
                 }
-
-                const llmData = await response.json();
 
                 // Track token usage for rate limit awareness. Proxy now
                 // returns usage under `usage`; fall back for safety.
@@ -1535,6 +1572,29 @@ const ChatInterface = ({ conversations }) => {
                 throw new Error('Maximum tool execution loops reached');
             }
         } catch (err) {
+            // Check if this was a user cancellation
+            if (err.name === 'AbortError') {
+                console.log('Prompt execution cancelled by user');
+                // Convert thinking message to cancelled message
+                setMessages(prev => {
+                    const newMessages = [...prev];
+                    if (newMessages.length > 0 && newMessages[newMessages.length - 1].isThinking) {
+                        const thinkingMsg = newMessages[newMessages.length - 1];
+                        newMessages[newMessages.length - 1] = {
+                            role: 'assistant',
+                            content: 'Request cancelled',
+                            timestamp: new Date().toISOString(),
+                            provider: thinkingMsg.provider,
+                            model: thinkingMsg.model,
+                            activity: thinkingMsg.activity || [],
+                            isCancelled: true
+                        };
+                    }
+                    return newMessages;
+                });
+                return;
+            }
+
             console.error('Prompt execution error:', err);
 
             // Convert thinking message to error message (preserve activity for debugging)
@@ -1558,6 +1618,7 @@ const ChatInterface = ({ conversations }) => {
         } finally {
             setExecutingPrompt(false);
             setLoading(false);
+            abortControllerRef.current = null;
         }
     }, [mcpClient, loading, messages, sessionToken, tools, llmProviders.selectedProvider, llmProviders.selectedModel, forceLogout, refreshTools, fetchDatabases, isWriteAccessEnabled, requestWriteConfirmation]);
 

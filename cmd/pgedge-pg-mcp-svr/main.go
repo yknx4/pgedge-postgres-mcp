@@ -902,10 +902,18 @@ func main() {
 						Temperature: llm.Float(cfg.LLM.Temperature),
 					}
 				}
+				if cfg.LLM.GeminiAPIKey != "" {
+					providers["gemini"] = llm.Options{
+						APIKey:      cfg.LLM.GeminiAPIKey,
+						Model:       cfg.LLM.Model,
+						MaxTokens:   llm.Int(cfg.LLM.MaxTokens),
+						Temperature: llm.Float(cfg.LLM.Temperature),
+					}
+				}
 
 				if len(providers) == 0 {
 					return fmt.Errorf("LLM is enabled but no provider is configured; " +
-						"set at least one of anthropic_api_key, openai_api_key, or ollama_url")
+						"set at least one of anthropic_api_key, openai_api_key, gemini_api_key, or ollama_url")
 				}
 
 				p := proxy.New(proxy.Config{
