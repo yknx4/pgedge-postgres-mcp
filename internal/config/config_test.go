@@ -740,6 +740,37 @@ func TestMergeConfig(t *testing.T) {
 	}
 }
 
+func TestMergePerAttemptTimeout(t *testing.T) {
+	dest := defaultConfig()
+	src := &Config{
+		LLM: LLMConfig{
+			Provider:          "anthropic",
+			PerAttemptTimeout: 25,
+		},
+		Embedding: EmbeddingConfig{
+			Provider:          "voyage",
+			PerAttemptTimeout: 12,
+		},
+		Knowledgebase: KnowledgebaseConfig{
+			Enabled:                    true,
+			EmbeddingProvider:          "voyage",
+			EmbeddingPerAttemptTimeout: 18,
+		},
+	}
+
+	mergeConfig(dest, src)
+
+	if dest.LLM.PerAttemptTimeout != 25 {
+		t.Errorf("LLM.PerAttemptTimeout = %d, want 25", dest.LLM.PerAttemptTimeout)
+	}
+	if dest.Embedding.PerAttemptTimeout != 12 {
+		t.Errorf("Embedding.PerAttemptTimeout = %d, want 12", dest.Embedding.PerAttemptTimeout)
+	}
+	if dest.Knowledgebase.EmbeddingPerAttemptTimeout != 18 {
+		t.Errorf("Knowledgebase.EmbeddingPerAttemptTimeout = %d, want 18", dest.Knowledgebase.EmbeddingPerAttemptTimeout)
+	}
+}
+
 func TestApplyCLIFlags(t *testing.T) {
 	cfg := defaultConfig()
 	flags := CLIFlags{
@@ -1284,5 +1315,35 @@ func TestNamedDatabaseConfig_Validate(t *testing.T) {
 				t.Fatalf("unexpected error: %v", err)
 			}
 		})
+	}
+}
+
+func TestPerAttemptTimeoutDefaults(t *testing.T) {
+	cfg := defaultConfig()
+	if cfg.LLM.PerAttemptTimeout != 60 {
+		t.Errorf("LLM.PerAttemptTimeout default = %d, want 60", cfg.LLM.PerAttemptTimeout)
+	}
+	if cfg.Embedding.PerAttemptTimeout != 60 {
+		t.Errorf("Embedding.PerAttemptTimeout default = %d, want 60", cfg.Embedding.PerAttemptTimeout)
+	}
+	if cfg.Knowledgebase.EmbeddingPerAttemptTimeout != 60 {
+		t.Errorf("Knowledgebase.EmbeddingPerAttemptTimeout default = %d, want 60", cfg.Knowledgebase.EmbeddingPerAttemptTimeout)
+	}
+}
+
+func TestPerAttemptTimeoutFromEnv(t *testing.T) {
+	t.Setenv("PGEDGE_LLM_PER_ATTEMPT_TIMEOUT", "30")
+	t.Setenv("PGEDGE_EMBEDDING_PER_ATTEMPT_TIMEOUT", "15")
+	t.Setenv("PGEDGE_KB_EMBEDDING_PER_ATTEMPT_TIMEOUT", "20")
+	cfg := defaultConfig()
+	applyEnvironmentVariables(cfg)
+	if cfg.LLM.PerAttemptTimeout != 30 {
+		t.Errorf("LLM.PerAttemptTimeout = %d, want 30", cfg.LLM.PerAttemptTimeout)
+	}
+	if cfg.Embedding.PerAttemptTimeout != 15 {
+		t.Errorf("Embedding.PerAttemptTimeout = %d, want 15", cfg.Embedding.PerAttemptTimeout)
+	}
+	if cfg.Knowledgebase.EmbeddingPerAttemptTimeout != 20 {
+		t.Errorf("Knowledgebase.EmbeddingPerAttemptTimeout = %d, want 20", cfg.Knowledgebase.EmbeddingPerAttemptTimeout)
 	}
 }

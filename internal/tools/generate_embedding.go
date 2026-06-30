@@ -63,6 +63,8 @@ func GenerateEmbeddingTool(cfg *config.Config) Tool {
 				OpenAIAPIKey:  cfg.Embedding.OpenAIAPIKey,
 				OpenAIBaseURL: cfg.Embedding.OpenAIBaseURL,
 				OllamaURL:     cfg.Embedding.OllamaURL,
+
+				PerAttemptTimeout: cfg.Embedding.PerAttemptTimeout,
 			})
 			if err != nil {
 				return mcp.NewToolError(fmt.Sprintf("Failed to initialize embedding provider: %v", err))

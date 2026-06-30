@@ -13,6 +13,7 @@ package tools
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/pgEdge/pgedge-go-llm-lib/llm"
 	_ "github.com/pgEdge/pgedge-go-llm-lib/llm/provider/ollama"
@@ -30,6 +31,8 @@ type embedClientConfig struct {
 	OpenAIAPIKey  string
 	OpenAIBaseURL string
 	OllamaURL     string
+
+	PerAttemptTimeout int
 }
 
 // newEmbedClient builds an llm.Client for the configured embedding
@@ -83,6 +86,8 @@ func newEmbedClient(cfg embedClientConfig) (llm.Client, string, error) {
 			provider,
 		)
 	}
+
+	opts.PerAttemptTimeout = time.Duration(cfg.PerAttemptTimeout) * time.Second
 
 	client, err := llm.NewClient(provider, opts)
 	if err != nil {

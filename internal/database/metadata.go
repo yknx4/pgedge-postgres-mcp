@@ -28,8 +28,8 @@ import (
 var loadMetadataSQL string
 
 // vectorDimsRe extracts the dimension count from a pgvector type
-// descriptor like "vector(1536)".
-var vectorDimsRe = regexp.MustCompile(`vector\((\d+)\)`)
+// descriptor like "vector(1536)" or "halfvec(1024)".
+var vectorDimsRe = regexp.MustCompile(`\((\d+)\)`)
 
 // metadataRow is one scanned row of loadMetadataSQL. Columns originating
 // from the LEFT JOIN against column_info are nullable because a table
@@ -84,29 +84,35 @@ func scanMetadataRow(rows pgx.Rows) (metadataRow, error) {
 	return r, err
 }
 
-// vectorColumnInfo returns whether the row describes a pgvector column
-// and, if so, the parsed dimension count. A typename of "vector" but a
-// data_type without a parenthesised dimension count yields (true, 0).
-func vectorColumnInfo(r metadataRow) (isVector bool, dimensions int) {
-	if !r.TypeName.Valid || r.TypeName.String != "vector" {
-		return false, 0
+// vectorColumnInfo returns whether the row describes a pgvector column,
+// the underlying vector type ("vector" or "halfvec"), and the parsed
+// dimension count. A vector typename but a data_type without a
+// parenthesised dimension count yields (true, <type>, 0).
+func vectorColumnInfo(r metadataRow) (isVector bool, vectorType string, dimensions int) {
+	if !r.TypeName.Valid {
+		return false, "", 0
+	}
+	switch r.TypeName.String {
+	case "vector", "halfvec":
+	default:
+		return false, "", 0
 	}
 	matches := vectorDimsRe.FindStringSubmatch(r.DataType.String)
 	if len(matches) < 2 {
-		return true, 0
+		return true, r.TypeName.String, 0
 	}
 	dim, err := strconv.Atoi(matches[1])
 	if err != nil {
-		return true, 0
+		return true, r.TypeName.String, 0
 	}
-	return true, dim
+	return true, r.TypeName.String, dim
 }
 
 // columnInfoFromRow builds a ColumnInfo from a single metadataRow.
 // Callers must check that the row actually carries column data
 // (r.ColumnName.Valid and non-empty) before calling.
 func columnInfoFromRow(r metadataRow) ColumnInfo {
-	isVector, dimensions := vectorColumnInfo(r)
+	isVector, vectorType, dimensions := vectorColumnInfo(r)
 	return ColumnInfo{
 		ColumnName:       r.ColumnName.String,
 		DataType:         r.DataType.String,
@@ -120,6 +126,7 @@ func columnInfoFromRow(r metadataRow) ColumnInfo {
 		DefaultValue:     r.DefaultValue,
 		IsVectorColumn:   isVector,
 		VectorDimensions: dimensions,
+		VectorType:       vectorType,
 	}
 }
 

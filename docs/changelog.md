@@ -11,6 +11,29 @@ and this project adheres to
 
 ### Added
 
+- A configurable per-attempt timeout bounds each individual HTTP attempt
+  to an LLM or embedding provider, so a single slow attempt becomes
+  retryable instead of consuming the whole request budget; the
+  knowledgebase embedding path honours the same setting. Configure it
+  with `per_attempt_timeout` in the `llm` and `embedding` config
+  sections, `embedding_per_attempt_timeout` in the `knowledgebase`
+  section, or the `PGEDGE_LLM_PER_ATTEMPT_TIMEOUT`,
+  `PGEDGE_EMBEDDING_PER_ATTEMPT_TIMEOUT`, and
+  `PGEDGE_KB_EMBEDDING_PER_ATTEMPT_TIMEOUT` environment variables
+  (default 60 seconds; set the corresponding environment variable to 0
+  to disable the cap).
+
+- Similarity search now validates the query embedding dimension against
+  the target vector column before querying, returning a clear error on a
+  mismatch instead of a raw database error.
+
+- Similarity search now supports pgvector `halfvec` columns; it detects
+  the column type and casts the query vector accordingly (requires
+  pgvector 0.7.0 or later).
+
+- The web client now uses the provider display name reported by the
+  proxy, falling back to its built-in labels when none is supplied.
+
 - Each built-in tool, resource, and prompt can now be enabled or
   disabled via an environment variable in addition to the
   `builtins` section of the configuration file. The variables are
