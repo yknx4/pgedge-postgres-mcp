@@ -37,6 +37,19 @@ and this project adheres to
   `o3-*`) are now supported transparently; the library routes them
   to `/v1/responses` automatically based on the model name.
 
+- Embedding provider clients (Voyage, OpenAI, Ollama) now use the
+  shared
+  [`pgedge-go-llm-lib`](https://github.com/pgEdge/pgedge-go-llm-lib)
+  library instead of hand-rolled HTTP wire code. Approximately 1100
+  lines of provider-specific code are removed from
+  `internal/embedding/`. The `Provider` interface and `NewProvider`
+  factory are preserved; tool consumers (search_knowledgebase,
+  generate_embedding, similarity_search) compile unchanged.
+
+- `Provider.Dimensions()` is now lazily populated from the first
+  successful `Embed` call; it returns 0 before any embedding has been
+  generated (previously the value was hard-coded per known model).
+
 - Refactored `Client.LoadMetadataFor` in
   `internal/database/connection.go`. The CTE-based metadata query
   now lives in `internal/database/load_metadata.sql` and is loaded
@@ -66,6 +79,18 @@ and this project adheres to
   by default; pass `KB_SOURCE` to override. The
   `pgedge-nla-kb-builder_*` release archives are no longer published
   from this repository.
+
+- The LLM HTTP proxy is now provided by `pgedge-go-llm-lib`'s
+  `llm/proxy` package, mounted at `/api/llm/`. The endpoints moved
+  from `/api/llm/{providers,models,chat}` to `/api/llm/v1/*`, and
+  the request/response wire format now uses typed content blocks
+  (see the library's `llm.ChatRequest` and `llm.ContentBlock`).
+  `internal/llmproxy/` is deleted; tracing plumbs through proxy
+  hooks via the new `internal/llmtracing` package.
+
+- A streaming chat endpoint `/api/llm/v1/chat/stream` (SSE) is now
+  exposed alongside the non-streaming endpoint. The non-streaming
+  `/v1/chat` endpoint remains available for callers that prefer it.
 
 ### Fixed
 

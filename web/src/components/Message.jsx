@@ -230,6 +230,14 @@ const Message = React.memo(({ message, showActivity, renderMarkdown, debug }) =>
                 )}
 
                 {/* Token Usage Debug Info */}
+                {/*
+                  * The library proxy returns a provider-agnostic
+                  * TokenUsage: prompt_tokens, completion_tokens,
+                  * total_tokens, plus cache_creation_input_tokens and
+                  * cache_read_input_tokens for providers that report
+                  * them. The old per-provider `provider` field and
+                  * `cache_savings_percentage` are no longer included.
+                  */}
                 {debug && message.role === 'assistant' && message.tokenUsage && (
                     <Box sx={{ mb: 1 }}>
                         <Typography
@@ -242,24 +250,26 @@ const Message = React.memo(({ message, showActivity, renderMarkdown, debug }) =>
                                 mb: 0.2,
                             }}
                         >
-                            {message.tokenUsage.provider === 'anthropic' && (
-                                <>
-                                    {message.tokenUsage.cache_creation_tokens > 0 || message.tokenUsage.cache_read_tokens > 0 ? (
-                                        <>
-                                            <div>📊 Prompt Cache: Created {message.tokenUsage.cache_creation_tokens || 0}, Read {message.tokenUsage.cache_read_tokens || 0} (saved ~{message.tokenUsage.cache_savings_percentage?.toFixed(0)}%)</div>
-                                            <div>🔢 Tokens: Input {message.tokenUsage.prompt_tokens}, Output {message.tokenUsage.completion_tokens}, Total {message.tokenUsage.total_tokens}</div>
-                                        </>
-                                    ) : (
-                                        <div>🔢 Tokens: Input {message.tokenUsage.prompt_tokens}, Output {message.tokenUsage.completion_tokens}, Total {message.tokenUsage.total_tokens}</div>
-                                    )}
-                                </>
-                            )}
-                            {message.tokenUsage.provider === 'openai' && (
-                                <div>🔢 Tokens: Prompt {message.tokenUsage.prompt_tokens}, Completion {message.tokenUsage.completion_tokens}, Total {message.tokenUsage.total_tokens}</div>
-                            )}
-                            {message.tokenUsage.provider === 'ollama' && (
-                                <div>ℹ️ Ollama does not provide token counts</div>
-                            )}
+                            {(() => {
+                                const usage = message.tokenUsage;
+                                const cacheCreate = usage.cache_creation_input_tokens ?? usage.cache_creation_tokens ?? 0;
+                                const cacheRead = usage.cache_read_input_tokens ?? usage.cache_read_tokens ?? 0;
+                                const hasCache = cacheCreate > 0 || cacheRead > 0;
+                                const hasTokens = (usage.prompt_tokens ?? 0) > 0
+                                    || (usage.completion_tokens ?? 0) > 0
+                                    || (usage.total_tokens ?? 0) > 0;
+                                if (!hasTokens && !hasCache) {
+                                    return <Box component="span" sx={{ display: 'block' }}>ℹ️ Provider did not report token counts</Box>;
+                                }
+                                return (
+                                    <>
+                                        {hasCache && (
+                                            <Box component="span" sx={{ display: 'block' }}>📊 Prompt Cache: Created {cacheCreate}, Read {cacheRead}</Box>
+                                        )}
+                                        <Box component="span" sx={{ display: 'block' }}>🔢 Tokens: Input {usage.prompt_tokens || 0}, Output {usage.completion_tokens || 0}, Total {usage.total_tokens || 0}</Box>
+                                    </>
+                                );
+                            })()}
                         </Typography>
                     </Box>
                 )}
@@ -337,13 +347,11 @@ Message.propTypes = {
         isCancelled: PropTypes.bool,
         fromPreviousSession: PropTypes.bool,
         tokenUsage: PropTypes.shape({
-            provider: PropTypes.string,
             prompt_tokens: PropTypes.number,
             completion_tokens: PropTypes.number,
             total_tokens: PropTypes.number,
-            cache_creation_tokens: PropTypes.number,
-            cache_read_tokens: PropTypes.number,
-            cache_savings_percentage: PropTypes.number,
+            cache_creation_input_tokens: PropTypes.number,
+            cache_read_input_tokens: PropTypes.number,
         }),
     }).isRequired,
     showActivity: PropTypes.bool.isRequired,

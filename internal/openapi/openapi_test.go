@@ -59,9 +59,11 @@ func TestBuildSpec_RequiredPaths(t *testing.T) {
 		"/api/databases/select",
 		"/api/user/info",
 		"/api/chat/compact",
-		"/api/llm/providers",
-		"/api/llm/models",
-		"/api/llm/chat",
+		"/api/llm/v1/providers",
+		"/api/llm/v1/models",
+		"/api/llm/v1/chat",
+		"/api/llm/v1/chat/stream",
+		"/api/llm/v1/health",
 		"/api/conversations",
 		"/api/conversations/{id}",
 		"/api/openapi.json",
@@ -189,6 +191,10 @@ func TestBuildSpec_RequiredSchemas(t *testing.T) {
 		"ModelsResponse",
 		"LLMChatRequest",
 		"LLMChatResponse",
+		"LLMMessage",
+		"LLMContentBlock",
+		"LLMTool",
+		"LLMTokenUsage",
 		"ConversationSummary",
 		"Conversation",
 		"CreateConversationRequest",
@@ -230,7 +236,7 @@ func TestBuildSpec_JSONSerializable(t *testing.T) {
 func TestBuildSpec_LLMModelsParameters(t *testing.T) {
 	spec := BuildSpec()
 	paths := spec["paths"].(M)
-	modelsPath := paths["/api/llm/models"].(M)
+	modelsPath := paths["/api/llm/v1/models"].(M)
 	get := modelsPath["get"].(M)
 
 	params, ok := get["parameters"].(A)

@@ -12,7 +12,6 @@ package embedding
 
 import (
 	"context"
-	"fmt"
 )
 
 // Provider defines the interface for embedding generation
@@ -45,33 +44,4 @@ type Config struct {
 
 	// Ollama-specific
 	OllamaURL string
-}
-
-// NewProvider creates a new embedding provider based on configuration
-func NewProvider(cfg Config) (Provider, error) {
-	switch cfg.Provider {
-	case "voyage":
-		if cfg.VoyageAPIKey == "" {
-			return nil, fmt.Errorf("Voyage AI API key is required when provider is 'voyage'")
-		}
-		return NewVoyageProvider(cfg.VoyageAPIKey, cfg.Model, cfg.VoyageBaseURL)
-
-	case "openai":
-		if cfg.OpenAIAPIKey == "" {
-			return nil, fmt.Errorf("OpenAI API key is required when provider is 'openai'")
-		}
-		return NewOpenAIProvider(cfg.OpenAIAPIKey, cfg.Model, cfg.OpenAIBaseURL)
-
-	case "ollama":
-		if cfg.OllamaURL == "" {
-			cfg.OllamaURL = "http://localhost:11434" // Default
-		}
-		if cfg.Model == "" {
-			cfg.Model = "nomic-embed-text" // Default model
-		}
-		return NewOllamaProvider(cfg.OllamaURL, cfg.Model)
-
-	default:
-		return nil, fmt.Errorf("unsupported embedding provider: %s (supported: voyage, openai, ollama)", cfg.Provider)
-	}
 }

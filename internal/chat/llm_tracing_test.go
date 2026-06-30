@@ -16,14 +16,12 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-
-	"pgedge-postgres-mcp/internal/embedding"
 )
 
 func TestTracingRoundTripper_LogsRequestAndResponse(t *testing.T) {
-	origLevel := embedding.GetLogLevel()
-	embedding.SetLogLevel(embedding.LogLevelDebug)
-	defer embedding.SetLogLevel(origLevel)
+	origLevel := GetLogLevel()
+	SetLogLevel(LogLevelDebug)
+	defer SetLogLevel(origLevel)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -84,9 +82,9 @@ func TestNewTracingHTTPClient_PassesThroughOnSuccess(t *testing.T) {
 }
 
 func TestTracingRoundTripper_NoLogWhenBelowDebug(t *testing.T) {
-	origLevel := embedding.GetLogLevel()
-	embedding.SetLogLevel(embedding.LogLevelInfo)
-	defer embedding.SetLogLevel(origLevel)
+	origLevel := GetLogLevel()
+	SetLogLevel(LogLevelInfo)
+	defer SetLogLevel(origLevel)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
