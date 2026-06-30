@@ -1,0 +1,31 @@
+Source: pgedge-nla
+Section: database
+Priority: optional
+Maintainer: Muhammad Aqeel <muhammad.aqeel@pgedge.com>
+Build-Depends: debhelper-compat (= 13)
+Standards-Version: 4.1.3
+Homepage: https://github.com/pgEdge/pgedge-postgres-mcp
+
+Package: pgedge-postgres-mcp
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: pgEdge Natural Language Agent - MCP Server
+ Model Context Protocol (MCP) server that enables natural language
+ queries against PostgreSQL databases. Provides HTTP/HTTPS API with read-only
+ query execution, schema analysis, and semantic search capabilities.
+
+Package: pgedge-nla-cli
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}, pgedge-postgres-mcp (= ${binary:Version})
+Description: pgEdge Natural Language Agent - CLI Client
+ Command-line chat client for interacting with PostgreSQL databases
+ using natural language. Connects to Natural Language Agent and supports
+ multiple LLM providers (Anthropic Claude, OpenAI, Ollama).
+
+Package: pgedge-nla-web
+Architecture: all
+Depends: ${misc:Depends}, pgedge-postgres-mcp (= ${source:Version}), python3, nginx
+Description: pgEdge Natural Language Agent - Web UI
+ Modern React-based web interface for the pgEdge Natural Language
+ Agent. Provides an intuitive UI for natural language database queries,
+ monitoring, and administration.

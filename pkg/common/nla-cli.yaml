@@ -1,0 +1,27 @@
+# pgEdge Natural Language Agent - CLI Client Configuration
+# User-specific config: ~/.config/pgedge/cli-config.yaml
+
+# MCP server connection
+mcp:
+  mode: "http"
+  url: "http://127.0.0.1:8080"
+  auth_mode: "user"  # token or user
+  # auth_token: ""  # Set via PGEDGE_MCP_TOKEN env var
+
+# LLM provider settings
+llm:
+  provider: anthropic  # anthropic, openai, or ollama
+  model: claude-sonnet-4-20250514
+  # API keys set via environment:
+  # ANTHROPIC_API_KEY or OPENAI_API_KEY
+
+  # Optional: Ollama configuration
+  # ollama:
+  #   url: http://localhost:11434
+  #   model: llama3
+
+# UI preferences
+ui:
+  color: true
+  markdown_rendering: true
+  prompt_caching: true
