@@ -17,6 +17,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -849,8 +850,17 @@ func TestHandleNotification_NullIDIsRequest(t *testing.T) {
 		t.Fatalf("expected status 200 for a request with null id, got %d", w.Code)
 	}
 
+	// Per JSON-RPC 2.0 §5.1 the response object MUST include the id
+	// member; for a request with explicit "id": null the response id
+	// is also null. Verify on the raw bytes because Decode into
+	// JSONRPCResponse cannot distinguish absent id from id: null.
+	raw := w.Body.String()
+	if !strings.Contains(raw, `"id":null`) {
+		t.Errorf("expected response to include `\"id\":null`, got %q", raw)
+	}
+
 	var response JSONRPCResponse
-	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+	if err := json.Unmarshal([]byte(raw), &response); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 	if response.Error == nil || response.Error.Code != -32601 {

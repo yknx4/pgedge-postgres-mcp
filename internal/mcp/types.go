@@ -18,10 +18,19 @@ type JSONRPCRequest struct {
 	Params  interface{} `json:"params,omitempty"`
 }
 
-// JSONRPCResponse represents an outgoing JSON-RPC 2.0 response
+// JSONRPCResponse represents an outgoing JSON-RPC 2.0 response.
+//
+// Per JSON-RPC 2.0 §5.1, the response object MUST include the id
+// member; the value is the id of the originating request, or null when
+// the id cannot be determined (e.g. Parse error / Invalid Request) or
+// when the request itself used "id": null. The id tag therefore does
+// not use omitempty — Go's encoder collapses a nil interface to JSON
+// null, which is exactly the required wire representation in those
+// cases. Result and Error remain mutually exclusive (one MUST be
+// present, the other absent), so both keep omitempty.
 type JSONRPCResponse struct {
 	JSONRPC string      `json:"jsonrpc"`
-	ID      interface{} `json:"id,omitempty"`
+	ID      interface{} `json:"id"`
 	Result  interface{} `json:"result,omitempty"`
 	Error   *RPCError   `json:"error,omitempty"`
 }

@@ -1,0 +1,64 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@
+
+override_dh_builddeb:
+	dh_builddeb -- -Zgzip
+
+override_dh_installsystemd:
+	# Do not enable or start the service on install — matches RPM %systemd_post behaviour where
+	# systemctl preset disables unknown third-party services (caught by 99-default-disable.preset).
+	# The user must configure /etc/pgedge/postgres-mcp.yaml and postgres-mcp.env, then
+	# manually run: systemctl enable --now pgedge-postgres-mcp
+	# On upgrade, restart only if the service was already running (matches RPM %systemd_postun_with_restart).
+	dh_installsystemd --no-enable --no-start --restart-after-upgrade
+
+override_dh_auto_install:
+	# --- SBOM generation and signing ---
+	#  Server
+	mkdir -p debian/tmp/sbom
+	syft dir:$(CURDIR)/server -o cyclonedx-json > debian/tmp/sbom/pgedge-postgres-mcp-sbom.json || exit 1
+	KEY_ID=$(gpg --list-secret-keys --with-colons | awk -F: '/^sec/{print $5}' | head -n 1); export KEY_ID
+	gpg --armor --detach-sign \
+		--output debian/tmp/sbom/pgedge-postgres-mcp-sbom.json.asc \
+		debian/tmp/sbom/pgedge-postgres-mcp-sbom.json || exit 1
+	install -D -m 755 server/pgedge-postgres-mcp debian/pgedge-postgres-mcp/usr/bin/pgedge-postgres-mcp
+	install -D -m 644 debian/postgres-mcp.yaml debian/pgedge-postgres-mcp/etc/pgedge/postgres-mcp.yaml
+	install -D -m 644 debian/postgres-mcp.env debian/pgedge-postgres-mcp/etc/pgedge/postgres-mcp.env
+	install -D -m 644 server/LICENSE.md debian/pgedge-postgres-mcp/usr/share/doc/pgedge-postgres-mcp/LICENSE.md
+	install -D -m 644 server/README.md debian/pgedge-postgres-mcp/usr/share/doc/pgedge-postgres-mcp/README.md
+	install -D -m 644 debian/tmp/sbom/pgedge-postgres-mcp-sbom.json debian/pgedge-postgres-mcp/usr/share/pgedge-postgres-mcp-sbom.json
+	install -D -m 644 debian/tmp/sbom/pgedge-postgres-mcp-sbom.json.asc debian/pgedge-postgres-mcp/usr/share/pgedge-postgres-mcp-sbom.json.asc
+	install -d debian/pgedge-postgres-mcp/var/lib/pgedge/postgres-mcp
+	install -d debian/pgedge-postgres-mcp/var/log/pgedge/postgres-mcp
+	#CLI
+	syft dir:$(CURDIR)/cli -o cyclonedx-json > debian/tmp/sbom/pgedge-nla-cli-sbom.json || exit 1
+	KEY_ID=$(gpg --list-secret-keys --with-colons | awk -F: '/^sec/{print $5}' | head -n 1); export KEY_ID
+	gpg --armor --detach-sign \
+		--output debian/tmp/sbom/pgedge-nla-cli-sbom.json.asc \
+		debian/tmp/sbom/pgedge-nla-cli-sbom.json || exit 1
+	install -D -m 755 cli/pgedge-nla-cli debian/pgedge-nla-cli/usr/bin/pgedge-nla-cli
+	install -D -m 644 debian/nla-cli.yaml debian/pgedge-nla-cli/etc/pgedge/nla-cli.yaml
+	install -D -m 644 cli/LICENSE.md debian/pgedge-nla-cli/usr/share/doc/pgedge-nla-cli/LICENSE.md
+	install -D -m 644 cli/README.md debian/pgedge-nla-cli/usr/share/doc/pgedge-nla-cli/README.md
+	install -D -m 644 debian/tmp/sbom/pgedge-nla-cli-sbom.json debian/pgedge-nla-cli/usr/share/pgedge-nla-cli-sbom.json
+	install -D -m 644 debian/tmp/sbom/pgedge-nla-cli-sbom.json.asc debian/pgedge-nla-cli/usr/share/pgedge-nla-cli-sbom.json.asc
+	install -d debian/pgedge-nla-cli/etc/skel/.config/pgedge
+	# Web
+	syft dir:$(CURDIR)/web -o cyclonedx-json > debian/tmp/sbom/pgedge-nla-web-sbom.json || exit 1
+	KEY_ID=$(gpg --list-secret-keys --with-colons | awk -F: '/^sec/{print $5}' | head -n 1); export KEY_ID
+	gpg --armor --detach-sign \
+		--output debian/tmp/sbom/pgedge-nla-web-sbom.json.asc \
+		debian/tmp/sbom/pgedge-nla-web-sbom.json || exit 1
+	install -d debian/pgedge-nla-web/usr/share/pgedge/nla-web
+	cp -r web/dist/* debian/pgedge-nla-web/usr/share/pgedge/nla-web/
+	install -D -m 644 debian/pgedge-nla-web.nginx debian/pgedge-nla-web/etc/nginx/sites-available/pgedge-nla-web
+	install -D -m 644 web/LICENSE.md debian/pgedge-nla-web/usr/share/doc/pgedge-nla-web/LICENSE.md
+	install -D -m 644 web/README.md debian/pgedge-nla-web/usr/share/doc/pgedge-nla-web/README.md
+	install -d debian/pgedge-nla-web/var/log/pgedge/nla-web
+	install -D -m 644 debian/tmp/sbom/pgedge-nla-web-sbom.json debian/pgedge-nla-web/usr/share/pgedge-nla-web-sbom.json
+	install -D -m 644 debian/tmp/sbom/pgedge-nla-web-sbom.json.asc debian/pgedge-nla-web/usr/share/pgedge-nla-web-sbom.json.asc
+	# Note: the kb.db knowledgebase and the kb-builder tool are no longer shipped
+	# here. They now live in the standalone pgedge-ai-kb project.
+	rm -rf debian/tmp/sbom

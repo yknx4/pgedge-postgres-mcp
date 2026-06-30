@@ -1,0 +1,48 @@
+[Unit]
+Description=pgEdge Natural Language Agent - MCP Server
+Documentation=https://github.com/pgEdge/pgedge-postgres-mcp
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=pgedge
+Group=pgedge
+WorkingDirectory=/var/lib/pgedge/postgres-mcp
+
+# Main executable
+ExecStart=/usr/bin/pgedge-postgres-mcp -http -config /etc/pgedge/postgres-mcp.yaml
+StandardOutput=append:/var/log/pgedge/postgres-mcp/postgres-mcp.log
+StandardError=append:/var/log/pgedge/postgres-mcp/postgres-mcp.log
+
+# Environment
+Environment="PGEDGE_DATA_DIR=/var/lib/pgedge/postgres-mcp"
+EnvironmentFile=-/etc/pgedge/postgres-mcp.env
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/pgedge/postgres-mcp /var/log/pgedge/postgres-mcp
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictRealtime=true
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=4096
+
+# Logging
+SyslogIdentifier=pgedge-postgres-mcp
+
+# Restart policy
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
