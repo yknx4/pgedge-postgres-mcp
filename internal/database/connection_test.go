@@ -12,6 +12,7 @@ package database
 
 import (
 	"context"
+	"database/sql"
 	"os"
 	"testing"
 	"time"
@@ -546,7 +547,7 @@ func mapKeys(m map[string]TableInfo) []string {
 	return keys
 }
 
-func TestDetectVectorColumn(t *testing.T) {
+func TestVectorColumnInfo(t *testing.T) {
 	cases := []struct {
 		typeName string
 		dataType string
@@ -560,9 +561,13 @@ func TestDetectVectorColumn(t *testing.T) {
 		{"text", "text", false, "", 0},
 	}
 	for _, tc := range cases {
-		gotVec, gotType, gotDims := detectVectorColumn(tc.typeName, tc.dataType)
+		r := metadataRow{
+			TypeName: sql.NullString{String: tc.typeName, Valid: true},
+			DataType: sql.NullString{String: tc.dataType, Valid: true},
+		}
+		gotVec, gotType, gotDims := vectorColumnInfo(r)
 		if gotVec != tc.wantVec || gotType != tc.wantType || gotDims != tc.wantDims {
-			t.Errorf("detectVectorColumn(%q,%q) = (%v,%q,%d), want (%v,%q,%d)",
+			t.Errorf("vectorColumnInfo(typeName=%q,dataType=%q) = (%v,%q,%d), want (%v,%q,%d)",
 				tc.typeName, tc.dataType, gotVec, gotType, gotDims,
 				tc.wantVec, tc.wantType, tc.wantDims)
 		}
