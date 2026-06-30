@@ -1,0 +1,26 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    configure)
+        # Create sites-enabled directory if it doesn't exist
+        mkdir -p /etc/nginx/sites-enabled
+        
+        # Enable nginx site. Test with -L (not -e): -e is false for a dangling
+        # symlink, which would let ln -s run against an existing link and fail
+        # under set -e. -L is true for any existing symlink (valid or broken),
+        # so we skip re-creating it without needing the non-portable ln -sf.
+        if [ ! -L /etc/nginx/sites-enabled/pgedge-nla-web ]; then
+            ln -s /etc/nginx/sites-available/pgedge-nla-web /etc/nginx/sites-enabled/pgedge-nla-web
+        fi
+        
+        # Test and reload nginx
+        if nginx -t >/dev/null 2>&1; then
+            systemctl reload nginx >/dev/null 2>&1 || true
+        fi
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

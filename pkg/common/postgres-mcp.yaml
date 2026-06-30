@@ -1,0 +1,124 @@
+# pgEdge Natural Language Agent - Server Configuration
+# See: https://github.com/pgEdge/pgedge-postgres-mcp/blob/main/docs/guide/configuration.md
+
+# Database connection settings
+databases:
+  - name: "default"
+    host: localhost
+    port: 5432
+    database: postgres
+    user: postgres
+    # Password can be set via PGEDGE_DB_PASSWORD environment variable
+    sslmode: prefer
+    pool_max_conns: 10
+    pool_min_conns: 2
+    pool_max_conn_idle_time: "5m"
+    connect_timeout: "10s"
+    available_to_users: []  # Empty = available to all users (ignored in STDIO mode)
+    # WARNING: allow_writes enables the AI to execute INSERT, UPDATE, DELETE, etc.
+    # Only enable on non-production databases where data loss is acceptable.
+    allow_writes: false
+    # Allow LLM to switch to this database (requires llm_connection_selection)
+    # Set to false to hide this database from LLM switching tools
+    allow_llm_switching: true
+    # Custom tool PL language restrictions
+    # Specifies which procedural languages can be used by custom pl-do and pl-func tools.
+    # Default is ["plpgsql"] if not specified. Use ["*"] to allow any installed language.
+    # WARNING: "untrusted" languages (plpython3u, plperlu) can access filesystem/network!
+    allowed_pl_languages:
+        - plpgsql       # Always safe - standard PL/pgSQL
+        # - plpython3u  # Full Python access - use with caution!
+        # - plv8        # JavaScript via V8 engine
+        # - plperl      # Perl (trusted version)
+
+    # Multi-host connection example (for high availability / failover):
+    # - name: "mydb-ha"
+    #   hosts:
+    #       - host: "primary.example.com"
+    #         port: 5432
+    #       - host: "replica.example.com"
+    #         port: 5432
+    #   target_session_attrs: "read-write"
+    #   database: "mydb"
+    #   user: "postgres"
+    #   password: ""
+    #   sslmode: "prefer"
+    #   connect_timeout: "10s"
+    #   pool_max_conns: 10
+    #   pool_min_conns: 2
+    #   pool_health_check_period: "30s"
+    #   pool_max_conn_lifetime: "5m"
+    #   allow_writes: false
+    #   allow_llm_switching: true
+
+# Built-in tools configuration
+# Enable or disable specific MCP tools
+builtins:
+    tools:
+        # Enable LLM to list and switch database connections
+        # When enabled, provides list_database_connections and select_database_connection tools
+        # Use allow_llm_switching on individual databases to control which are visible
+        llm_connection_selection: false  # Default: false (disabled for security)
+
+# Embedding generation configuration
+# Enable to allow generating embeddings for semantic search
+#embedding:
+    #enabled: false
+    #provider: "openai"  # Options: "voyage", "openai", "ollama"
+    #model: "text-embedding-3-small"
+
+    # API key files (recommended for production)
+    # voyage_api_key_file: "~/.voyage-api-key"
+    # openai_api_key_file: "~/.openai-api-key"
+
+    # Or use environment variables: VOYAGE_API_KEY, OPENAI_API_KEY
+
+    # Optional: Custom base URLs for API proxies
+    # voyage_base_url: ""  # Default: https://api.voyageai.com/v1/embeddings
+    # openai_base_url: ""  # Default: https://api.openai.com/v1
+
+# HTTP server settings
+http:
+  enabled: true
+  address: "localhost:8080"
+
+  # TLS/HTTPS configuration (optional)
+  tls:
+    enabled: false
+    # cert_file: /etc/pgedge/certs/server.crt
+    # key_file: /etc/pgedge/certs/server.key
+
+  # Authentication settings
+  auth:
+    enabled: false
+    token_file: /etc/pgedge/postgres-mcp-tokens.yaml
+    user_file: /etc/pgedge/postgres-mcp-users.yaml
+    max_failed_attempts_before_lockout: 5  # Lock account after N failed attempts (0 = disabled)
+    rate_limit_window_minutes: 15  # Time window for rate limiting
+    rate_limit_max_attempts: 10  # Max failed attempts per IP per window
+
+# LLM proxy settings (optional - for web UI)
+llm:
+  enabled: false
+  # provider: anthropic  # anthropic, openai, or ollama
+  # Set API keys via environment variables:
+  # ANTHROPIC_API_KEY or OPENAI_API_KEY
+
+# Knowledgebase database (for similarity_search tool)
+# Requires pgedge-ai-kb package
+knowledgebase:
+  enabled: true
+  database_path: /usr/share/pgedge/pgedge-ai-kb/kb.db
+  #embedding_provider: "voyage"
+  #embedding_model: "voyage-3"
+
+  # API key files for knowledgebase embeddings
+  # embedding_voyage_api_key_file: "~/.voyage-api-key"
+  # embedding_openai_api_key_file: "~/.openai-api-key"
+
+  # Optional: Custom base URLs for knowledgebase embedding API proxies
+  # embedding_voyage_base_url: ""  # Default: https://api.voyageai.com/v1/embeddings
+  # embedding_openai_base_url: ""  # Default: https://api.openai.com/v1
+
+# Custom prompts and resources (optional)
+# custom_definitions_path: /etc/pgedge/custom-definitions.yaml

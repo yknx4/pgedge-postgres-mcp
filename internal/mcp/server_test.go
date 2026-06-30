@@ -16,6 +16,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -489,15 +490,133 @@ func TestHandlePing_Stdio_WithID(t *testing.T) {
 	}
 }
 
-func TestHandlePing_Stdio_NilIDIsNotification(t *testing.T) {
-	server := NewServer(&mockToolProvider{})
-	req := JSONRPCRequest{JSONRPC: "2.0", ID: nil, Method: "ping"}
+// runStdio runs server.Run() with the given input piped to stdin and
+// returns whatever the server wrote to stdout. The input may contain
+// multiple newline-separated JSON-RPC messages; closing the write end
+// after writing causes Run to return cleanly on EOF.
+func runStdio(t *testing.T, server *Server, input string) string {
+	t.Helper()
 
-	out := captureStdout(t, func() {
-		server.handlePing(req)
+	oldIn := os.Stdin
+	rIn, wIn, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe (stdin) failed: %v", err)
+	}
+	os.Stdin = rIn
+	defer func() {
+		os.Stdin = oldIn
+		_ = rIn.Close()
+	}()
+
+	if _, err := io.WriteString(wIn, input); err != nil {
+		t.Fatalf("write stdin failed: %v", err)
+	}
+	if err := wIn.Close(); err != nil {
+		t.Fatalf("close stdin write end failed: %v", err)
+	}
+
+	return captureStdout(t, func() {
+		if err := server.Run(); err != nil {
+			t.Fatalf("server.Run failed: %v", err)
+		}
 	})
+}
 
+// TestRunStdio_NotificationsInitialized verifies that a real JSON-RPC
+// notification (no "id" member, per §4.1) produces no response on stdio.
+func TestRunStdio_NotificationsInitialized(t *testing.T) {
+	server := NewServer(&mockToolProvider{})
+	input := `{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}` + "\n"
+
+	out := runStdio(t, server, input)
 	if out != "" {
-		t.Errorf("notification ping must produce no response, got %q", out)
+		t.Errorf("notification must produce no response, got %q", out)
+	}
+}
+
+// TestRunStdio_UnknownNotification verifies that unknown-method
+// notifications are silently acknowledged. Replying with -32601 to a
+// notification would be doubly wrong per JSON-RPC 2.0 §4.1: the server
+// must not reply at all, and the reply would have no id (itself a
+// malformed JSON-RPC body).
+func TestRunStdio_UnknownNotification(t *testing.T) {
+	for _, method := range []string{
+		"notifications/cancelled",
+		"notifications/roots/list_changed",
+		"some/unknown/notification",
+	} {
+		t.Run(method, func(t *testing.T) {
+			server := NewServer(&mockToolProvider{})
+			input := `{"jsonrpc":"2.0","method":"` + method + `","params":{}}` + "\n"
+
+			out := runStdio(t, server, input)
+			if out != "" {
+				t.Errorf("unknown notification must produce no response, got %q", out)
+			}
+		})
+	}
+}
+
+// TestRunStdio_NullIDIsRequest_UnknownMethod is the regression for issue
+// #152: JSON-RPC 2.0 distinguishes "id absent" (notification, no reply)
+// from "id: null" (a request whose id happens to be null; reply
+// required). A request with explicit null id targeting an unknown
+// method must receive a -32601 response, not be silently dropped.
+func TestRunStdio_NullIDIsRequest_UnknownMethod(t *testing.T) {
+	server := NewServer(&mockToolProvider{})
+	input := `{"jsonrpc":"2.0","id":null,"method":"unknown/method"}` + "\n"
+
+	out := runStdio(t, server, input)
+	if out == "" {
+		t.Fatal("expected a -32601 response for a request with null id, got nothing")
+	}
+
+	// Per JSON-RPC 2.0 §5.1 the response object MUST include the id
+	// member; for a request with explicit "id": null the response id
+	// is also null. Verify on the raw bytes because Decode into
+	// JSONRPCResponse cannot distinguish absent id from id: null.
+	if !strings.Contains(out, `"id":null`) {
+		t.Errorf("expected response to include `\"id\":null`, got %q", out)
+	}
+
+	var resp JSONRPCResponse
+	if err := json.Unmarshal([]byte(out), &resp); err != nil {
+		t.Fatalf("failed to decode response %q: %v", out, err)
+	}
+	if resp.Error == nil || resp.Error.Code != -32601 {
+		t.Errorf("expected -32601 Method not found, got %+v", resp.Error)
+	}
+}
+
+// TestRunStdio_NullIDIsRequest_Ping is the companion to
+// TestRunStdio_NullIDIsRequest_UnknownMethod for a method the
+// dispatcher recognises: a ping with explicit "id": null is a request
+// and must be answered with the standard empty-object result.
+func TestRunStdio_NullIDIsRequest_Ping(t *testing.T) {
+	server := NewServer(&mockToolProvider{})
+	input := `{"jsonrpc":"2.0","id":null,"method":"ping"}` + "\n"
+
+	out := runStdio(t, server, input)
+	if out == "" {
+		t.Fatal("expected a ping response for a request with null id, got nothing")
+	}
+
+	if !strings.Contains(out, `"id":null`) {
+		t.Errorf("expected response to include `\"id\":null`, got %q", out)
+	}
+
+	var resp JSONRPCResponse
+	if err := json.Unmarshal([]byte(out), &resp); err != nil {
+		t.Fatalf("failed to decode response %q: %v", out, err)
+	}
+	if resp.Error != nil {
+		t.Errorf("unexpected error in response: %+v", resp.Error)
+	}
+	result, ok := resp.Result.(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected map result, got %T", resp.Result)
+	}
+	if len(result) != 0 {
+		t.Errorf("expected empty object result, got %v", result)
 	}
 }
