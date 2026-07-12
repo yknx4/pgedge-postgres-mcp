@@ -60,6 +60,18 @@ builtins:
         # Use allow_llm_switching on individual databases to control which are visible
         llm_connection_selection: false  # Default: false (disabled for security)
 
+# PII masking for query_database results. Disabled by default. Detection uses
+# column names only; EXPLAIN and ANALYZE queries always bypass masking.
+# pii:
+#   enabled: true
+#   columns:
+#     email: [alternate_email]
+#     phone: [work_phone]
+#     token: [oauth_token]
+#     password: [legacy_password_hash]
+#     generic: [private_identifier]
+# Individual databases may override these settings with the same pii block.
+
 # Embedding generation configuration
 # Enable to allow generating embeddings for semantic search
 #embedding:

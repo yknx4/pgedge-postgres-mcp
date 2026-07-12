@@ -278,6 +278,16 @@ func (c *Client) AllowWrites() bool {
 	return c.dbConfig.AllowWrites
 }
 
+// PIIConfig returns the optional PII masking overrides for this database.
+func (c *Client) PIIConfig() *config.PIIConfig {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.dbConfig == nil {
+		return nil
+	}
+	return c.dbConfig.PII
+}
+
 // Close closes all database connections
 func (c *Client) Close() {
 	c.mu.Lock()

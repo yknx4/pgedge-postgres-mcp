@@ -16,6 +16,7 @@ import (
 	"strings"
 	"unicode"
 
+	"pgedge-postgres-mcp/internal/config"
 	"pgedge-postgres-mcp/internal/database"
 	"pgedge-postgres-mcp/internal/logging"
 	"pgedge-postgres-mcp/internal/mcp"
@@ -47,7 +48,7 @@ func stripTrailingSemicolons(query string) string {
 }
 
 // QueryDatabaseTool creates the query_database tool
-func QueryDatabaseTool(dbClient *database.Client) Tool {
+func QueryDatabaseTool(dbClient *database.Client, piiConfig config.PIIConfig) Tool {
 	// Determine the write access description based on configuration
 	writeAccessDesc := "All queries run in READ-ONLY transactions (no data modifications possible)"
 	allowWrites := dbClient != nil && dbClient.AllowWrites()
@@ -376,6 +377,13 @@ To avoid rate limits (30,000 input tokens/minute):
 				results = results[:limit] // Truncate to requested limit
 			}
 
+			masker, maskingEnabled := newPIIMasker(piiConfig, dbClient.PIIConfig())
+			maskedValues := 0
+			performanceQuery := isPerformanceQuery(sqlQuery)
+			if isSelectQuery && maskingEnabled && !performanceQuery {
+				maskedValues = masker.mask(columnNames, results)
+			}
+
 			// Format results as TSV (tab-separated values) for row-returning queries
 			resultsTSV := ""
 			if returnsRows {
@@ -394,6 +402,9 @@ To avoid rate limits (30,000 input tokens/minute):
 			}
 
 			var sb strings.Builder
+			if isSelectQuery && !performanceQuery && !maskingEnabled {
+				sb.WriteString("WARNING: PII masking is disabled; query results may contain sensitive data.\n\n")
+			}
 
 			// Always show current database context (unless already shown via connection message)
 			if connectionMessage == "" {
@@ -439,6 +450,7 @@ To avoid rate limits (30,000 input tokens/minute):
 				"offset", offset,
 				"was_truncated", wasTruncated,
 				"returns_rows", returnsRows,
+				"pii_masked_values", maskedValues,
 				"estimated_tokens", len(resultsTSV)/4,
 			)
 

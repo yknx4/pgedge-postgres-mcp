@@ -71,6 +71,59 @@ func TestDefaultConfig(t *testing.T) {
 	}
 }
 
+func TestLoadConfigFileExpandsEnvironmentVariables(t *testing.T) {
+	t.Setenv("TEST_CONFIG_DB_HOST", "db.example.com")
+	t.Setenv("TEST_CONFIG_DB_PASSWORD", "p@ss:word#123")
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	contents := `
+databases:
+  - name: test
+    host: "${TEST_CONFIG_DB_HOST}"
+    database: test
+    user: postgres
+    password: "${TEST_CONFIG_DB_PASSWORD}"
+`
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := loadConfigFile(path)
+	if err != nil {
+		t.Fatalf("loadConfigFile() error = %v", err)
+	}
+	if cfg.Databases[0].Host != "db.example.com" {
+		t.Errorf("host = %q, want db.example.com", cfg.Databases[0].Host)
+	}
+	if cfg.Databases[0].Password != "p@ss:word#123" {
+		t.Errorf("password = %q, want expanded value", cfg.Databases[0].Password)
+	}
+}
+
+func TestLoadConfigFileRejectsUnsetEnvironmentVariable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("secret_file: ${TEST_CONFIG_MISSING}\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, err := loadConfigFile(path)
+	if err == nil || !strings.Contains(err.Error(), "TEST_CONFIG_MISSING") {
+		t.Fatalf("loadConfigFile() error = %v, want missing variable error", err)
+	}
+}
+
+func TestLoadConfigFileRejectsEmptyEnvironmentVariable(t *testing.T) {
+	t.Setenv("TEST_CONFIG_EMPTY", "")
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("secret_file: ${TEST_CONFIG_EMPTY}\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, err := loadConfigFile(path)
+	if err == nil || !strings.Contains(err.Error(), "TEST_CONFIG_EMPTY") {
+		t.Fatalf("loadConfigFile() error = %v, want empty variable error", err)
+	}
+}
+
 func TestBuildConnectionString(t *testing.T) {
 	tests := []struct {
 		name     string

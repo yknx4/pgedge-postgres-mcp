@@ -25,6 +25,17 @@ specify a different location.
 
 A complete example configuration file with detailed comments is available [here](../reference/config-examples/server.md).
 
+String values may reference environment variables with `${VARIABLE}`. Expansion
+happens after YAML parsing, so credential values containing characters such as
+`:` or `#` remain intact. Referenced variables are required: server startup
+fails when one is unset or empty.
+
+```yaml
+databases:
+  - name: production
+    password: "${POSTGRES_PASSWORD}"
+```
+
 The following tables list the configuration options you can use to
 specify property values, grouped by section.
 
@@ -80,6 +91,50 @@ environment variables (`PGEDGE_DB_N_*`) to configure multiple
 databases; see
 [Environment Variables](env_variable_config.md#multiple-database-configuration)
 for details.
+
+### PII Masking
+
+PII masking is disabled by default. When disabled, `query_database` warns that
+SELECT results may contain sensitive data. Enable it globally with:
+
+```yaml
+pii:
+  enabled: true
+  columns:
+    email: [alternate_email]
+    phone: [work_phone]
+```
+
+Detection uses column names only to avoid value-based false positives. Built-in
+column names cover email addresses, personal names, phone numbers, postal
+addresses, usernames, IP addresses, Social Security numbers, and credit card
+numbers, passwords, and tokens. The optional `columns` map adds aliases under
+those PII types. Values are replaced with realistic fake data, and repeated
+values receive the same replacement within one response. The `generic` type
+preserves only the first and last character, masks the characters between them
+with `*`, fully masks values shorter than three characters, and leaves null
+values unchanged.
+
+```yaml
+pii:
+  enabled: true
+  columns:
+    token: [oauth_token]
+    password: [legacy_password_hash]
+    generic: [private_identifier]
+```
+
+An individual database can override the global setting or column aliases:
+
+```yaml
+databases:
+  - name: production
+    pii:
+      enabled: true
+```
+
+PII processing applies only to SELECT results returned by `query_database`.
+`execute_explain`, `EXPLAIN`, and `ANALYZE` always bypass it.
 
 ### LLM Proxy
 
@@ -300,4 +355,3 @@ The following example starts the MCP server in HTTP mode using properties specif
   -http \
   -addr ":9090"
 ```
-

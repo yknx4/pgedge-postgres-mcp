@@ -86,6 +86,14 @@ When enabled, the LLM has access to `list_database_connections` and
 `select_database_connection` tools. When disabled, users can still switch
 databases manually via CLI commands or Web UI.
 
+## PII Masking
+
+- **`PGEDGE_PII_ENABLED`**: Enable realistic PII masking for
+  `query_database` SELECT results (`true`, `1`, or `yes`; default: disabled).
+  Configure additional recognized column names in the YAML configuration file.
+
+`execute_explain`, `EXPLAIN`, and `ANALYZE` always bypass PII processing.
+
 ## HTTP/HTTPS Server Configuration
 
 The following environment variables specify HTTP/HTTPS Server preferences:

@@ -82,7 +82,7 @@ func (p *ContextAwareProvider) registerStatelessTools(registry *Registry) {
 // registerDatabaseTools registers all database-dependent tools
 func (p *ContextAwareProvider) registerDatabaseTools(registry *Registry, client *database.Client) {
 	if p.cfg.Builtins.Tools.IsToolEnabled("query_database") {
-		registry.Register("query_database", QueryDatabaseTool(client))
+		registry.Register("query_database", QueryDatabaseTool(client, p.cfg.PII))
 	}
 	if p.cfg.Builtins.Tools.IsToolEnabled("get_schema_info") {
 		registry.Register("get_schema_info", GetSchemaInfoTool(client))

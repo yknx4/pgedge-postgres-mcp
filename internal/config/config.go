@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/allex/envsubst"
 	"gopkg.in/yaml.v3"
 )
 
@@ -43,6 +44,9 @@ type Config struct {
 	// Built-in tools, resources, and prompts configuration
 	Builtins BuiltinsConfig `yaml:"builtins"`
 
+	// PII masking configuration for query_database results
+	PII PIIConfig `yaml:"pii"`
+
 	// Secret file path (for encryption key)
 	SecretFile string `yaml:"secret_file"`
 
@@ -54,6 +58,13 @@ type Config struct {
 
 	// Trace file path (for logging MCP requests/responses in JSONL format)
 	TraceFile string `yaml:"trace_file"`
+}
+
+// PIIConfig controls masking of PII in query_database results. Columns maps
+// PII types (for example, "email" or "phone") to additional column names.
+type PIIConfig struct {
+	Enabled *bool               `yaml:"enabled"`
+	Columns map[string][]string `yaml:"columns,omitempty"`
 }
 
 // BuiltinsConfig holds configuration for enabling/disabling built-in tools, resources, and prompts
@@ -258,9 +269,10 @@ type NamedDatabaseConfig struct {
 	// Only used when Hosts is set.
 	TargetSessionAttrs string `yaml:"target_session_attrs,omitempty"`
 
-	AvailableToUsers  []string `yaml:"available_to_users,omitempty"`  // List of usernames allowed to access this database (empty = all users)
-	AllowWrites       bool     `yaml:"allow_writes"`                  // Allow LLM to execute write queries (default: false - read-only)
-	AllowLLMSwitching *bool    `yaml:"allow_llm_switching,omitempty"` // Allow LLM to discover/switch to this database (default: true when feature enabled)
+	AvailableToUsers  []string   `yaml:"available_to_users,omitempty"`  // List of usernames allowed to access this database (empty = all users)
+	AllowWrites       bool       `yaml:"allow_writes"`                  // Allow LLM to execute write queries (default: false - read-only)
+	AllowLLMSwitching *bool      `yaml:"allow_llm_switching,omitempty"` // Allow LLM to discover/switch to this database (default: true when feature enabled)
+	PII               *PIIConfig `yaml:"pii,omitempty"`                 // Optional PII masking overrides for this database
 
 	// Custom tool settings
 	AllowedPLLanguages []string `yaml:"allowed_pl_languages,omitempty"` // PL languages allowed for custom tools (e.g., ["plpgsql", "plpython3u"]). Use ["*"] for all.
@@ -640,12 +652,37 @@ func loadConfigFile(path string) (*Config, error) {
 		return nil, err
 	}
 
+	var document yaml.Node
+	if err := yaml.Unmarshal(data, &document); err != nil {
+		return nil, fmt.Errorf("failed to parse YAML: %w", err)
+	}
+	if err := expandConfigEnvironment(&document); err != nil {
+		return nil, fmt.Errorf("failed to expand environment variables: %w", err)
+	}
+
 	var cfg Config
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
+	if err := document.Decode(&cfg); err != nil {
 		return nil, fmt.Errorf("failed to parse YAML: %w", err)
 	}
 
 	return &cfg, nil
+}
+
+func expandConfigEnvironment(node *yaml.Node) error {
+	if node.Kind == yaml.ScalarNode && node.Tag == "!!str" {
+		expanded, err := envsubst.StringRestricted(node.Value, true, true)
+		if err != nil {
+			return err
+		}
+		node.Value = expanded
+	}
+
+	for _, child := range node.Content {
+		if err := expandConfigEnvironment(child); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // mergeConfig merges source config into dest, only overriding non-zero values
@@ -875,6 +912,14 @@ func mergeConfig(dest, src *Config) {
 	}
 	if src.Builtins.Prompts.DesignSchema != nil {
 		dest.Builtins.Prompts.DesignSchema = src.Builtins.Prompts.DesignSchema
+	}
+
+	// PII masking
+	if src.PII.Enabled != nil {
+		dest.PII.Enabled = src.PII.Enabled
+	}
+	if src.PII.Columns != nil {
+		dest.PII.Columns = src.PII.Columns
 	}
 }
 
@@ -1140,6 +1185,9 @@ func applyEnvironmentVariables(cfg *Config) {
 
 	// Trace file
 	setStringFromEnv(&cfg.TraceFile, "PGEDGE_TRACE_FILE")
+
+	// PII masking
+	setBoolPtrFromEnv(&cfg.PII.Enabled, "PGEDGE_PII_ENABLED")
 
 	// Built-in tools, resources, and prompts.
 	// Useful for containerized deployments where editing the config file is awkward.

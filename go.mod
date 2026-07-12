@@ -3,6 +3,8 @@ module pgedge-postgres-mcp
 go 1.26.1
 
 require (
+	github.com/allex/envsubst v1.0.8
+	github.com/brianvoe/gofakeit/v7 v7.15.0
 	github.com/charmbracelet/glamour v0.10.0
 	github.com/chzyer/readline v1.5.1
 	github.com/fsnotify/fsnotify v1.9.0
